@@ -9,9 +9,12 @@ then loaded into Clay, or linked into executables build with `clay --compile`.
 ```clay
 import("image")
 
-c = ClayImage counter(10)
-c add(5)
-c value println          // 15
+image = Image clone
+image load(path)        // Loads the image at the given path
+image savePng(path)     // Saves the given image to the specified path
+image info(path)        // Prints information about the image at the given path
+image width             // Returns the width of the image
+image height            // Returns the height of the image
 ```
 
 ## Install
