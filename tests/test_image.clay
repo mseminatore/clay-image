@@ -2,6 +2,9 @@
 //   clay tests/test_image.clay
 // The first run builds the C plugin (into build/, which is not committed); a
 // brick can be imported by its own name from inside its own directory.
+//
+// The tests need no image files: they make images with known pixels, and write
+// files only to a temporary directory, which they remove.
 import("image")
 
 failures = 0
@@ -12,55 +15,85 @@ check = { |what, ok|
 
 raises = { |block| try { block value; "no error" } catch { |e| e type } }
 
-// open, load, save
-img = Image open("default.png")
-check("width", img width == 128)
-check("height", img height == 128)
-check("channels", img channels == 4)
-check("images are Images", img parent == Image)
-check("load reloads in place", (img load("default.png")) == img)
+dir = File tempDir
+out = dir + "/out.png"
+ext = dir + "/external.png"
 
-out = "build/test_out.png"
+// an image whose every byte is known: 16 x 8 RGBA
+w = 16
+h = 8
+known = (0..((w * h * 4) - 1)) map { |i| ((i * 7) + 3) % 256 }
+img = Image fromBytes(w, h, 4, String fromBytes(known))
+check("width", img width == w)
+check("height", img height == h)
+check("channels", img channels == 4)
+check("pixels", img pixels bytes == known)
+check("images are Images", img parent == Image)
+check("type", (img type == "Image") && (Image type == "Image"))
+
+// round trip through a PNG file, with every channel count
 img savePng(out)
-copy = Image open(out)
-check("round trip width", copy width == 128)
-check("round trip height", copy height == 128)
+copy = Image load(out)
+check("round trip size", (copy width == w) && (copy height == h) && (copy channels == 4))
 check("round trip pixels", copy pixels == img pixels)
+(1..3) each { |c|
+    bytes = String fromBytes(known slice(0, w * h * c))
+    Image fromBytes(w, h, c, bytes) savePng(out)
+    back = Image load(out)
+    check("round trip with " + c toString + " channels", (back channels == c) && (back pixels == bytes))
+}
+
+// a PNG stb didn't write: 3 x 2 RGB, rows filtered None and Up, zlib level 9
+File write(ext, String fromBytes([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82,
+    0, 0, 0, 3, 0, 0, 0, 2, 8, 2, 0, 0, 0, 18, 22, 241, 77, 0, 0, 0, 24, 73, 68, 65, 84, 120,
+    218, 99, 248, 207, 192, 192, 0, 198, 76, 220, 34, 114, 26, 198, 54, 191, 26, 152, 0, 53,
+    159, 5, 80, 110, 110, 6, 210, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130]))
+other = Image load(ext)
+check("external PNG size", (other width == 3) && (other height == 2) && (other channels == 3))
+check("external PNG pixels", other pixels bytes == [255, 0, 0, 0, 255, 0, 0, 0, 255, 10, 20, 30, 40, 50, 60, 250, 128, 1])
 
 // Clay methods added to Image reach every image
 Image setMethod("area", { self width * self height })
-check("Clay methods on images", img area == (128 * 128))
+check("Clay methods on images", img area == (w * h))
 
 // raw pixels
-check("pixels length", img pixels length == (128 * 128 * 4))
-check("fromBytes keeps pixels", (Image fromBytes(128, 128, 4, img pixels)) pixels == img pixels)
-check("setPixels reshapes", (Image new setPixels(2, 1, 1, String fromBytes([7, 200]))) pixels bytes == [7, 200])
+check("pixels length", img pixels length == (w * h * 4))
+check("fromBytes keeps pixels", (Image fromBytes(w, h, 4, img pixels)) pixels == img pixels)
+check("fromBytes takes any shape", (Image fromBytes(2, 1, 1, String fromBytes([7, 200]))) pixels bytes == [7, 200])
 
 // floats
 f = img floats
-check("floats length", f size == (128 * 128 * 4))
+check("floats length", f size == (w * h * 4))
+check("floats are bytes / 255", ((f at(0)) == (3 / 255.0)) && ((f at(5)) == (38 / 255.0)))
 check("floats in 0..1", (f min >= 0) && (f max <= 1))
-check("floats round trip", (Image fromFloats(128, 128, 4, f)) pixels == img pixels)
+check("floats round trip", (Image fromFloats(w, h, 4, f)) pixels == img pixels)
 gray = Image fromFloats(3, 2, 1, [0, 0.5, 1, 2, -1, 0.25])
 check("fromFloats clamps and rounds", gray pixels bytes == [0, 128, 255, 255, 0, 64])
 check("fromFloats takes rows", (Image fromFloats(3, 2, 1, [[0, 0.5, 1], [2, -1, 0.25]])) pixels == gray pixels)
-gray savePng(out)
-check("grayscale saves and loads", (Image open(out)) pixels == gray pixels)
 
 // errors
-check("images are independent", (Image new) width == 0)
-check("missing file raises", (raises value({ Image open("no-such-file.png") })) == "RuntimeError")
-check("bad path raises", (raises value({ Image open(42) })) == "ArgumentError")
-check("failed load keeps the image", ((raises value({ img load("no-such-file.png") })) == "RuntimeError") && (img width == 128) && (img channels == 4))
-check("saving an empty image raises", (raises value({ Image new savePng(out) })) == "RuntimeError")
-check("pixels of an empty image raises", (raises value({ Image new pixels })) == "RuntimeError")
-check("bare prototype raises", (raises value({ ImageCore width })) == "RuntimeError")
-check("bare Image raises", (raises value({ Image width })) == "RuntimeError")
+check("missing file raises", (raises value({ Image load(dir + "/no-such-file.png") })) == "RuntimeError")
+check("bad path raises", (raises value({ Image load(42) })) == "ArgumentError")
+check("load on an image raises", (raises value({ img load(out) })) == "RuntimeError")
+check("fromBytes on an image raises", (raises value({ img fromBytes(1, 1, 1, "a") })) == "RuntimeError")
+check("fromFloats on an image raises", (raises value({ img fromFloats(1, 1, 1, [0]) })) == "RuntimeError")
+check("the image is unchanged after", (img width == w) && (img pixels bytes == known))
 check("wrong byte count raises", (raises value({ Image fromBytes(2, 2, 1, "abc") })) == "ArgumentError")
 check("wrong number count raises", (raises value({ Image fromFloats(2, 2, 1, [0, 1]) })) == "ArgumentError")
 check("bad channels raises", (raises value({ Image fromFloats(1, 1, 5, [0, 0, 0, 0, 0]) })) == "ArgumentError")
 check("zero width raises", (raises value({ Image fromBytes(0, 1, 1, "") })) == "ArgumentError")
 check("non-number raises", (raises value({ Image fromFloats(1, 1, 1, ["x"]) })) == "TypeError")
+
+// the C layer
+check("failed _read keeps the image", ((raises value({ img _read(dir + "/no-such-file.png") })) == "RuntimeError") && (img width == w) && (img channels == 4))
+check("saving an empty image raises", (raises value({ ImageCore _create savePng(out) })) == "RuntimeError")
+check("pixels of an empty image raises", (raises value({ ImageCore _create pixels })) == "RuntimeError")
+check("bare prototype raises", (raises value({ ImageCore width })) == "RuntimeError")
+check("bare Image raises", (raises value({ Image width })) == "RuntimeError")
+
+File delete(out)
+File delete(ext)
+File delete(dir)
 
 // Did we pass all tests?!
 (failures > 0) ifTrue {

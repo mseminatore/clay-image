@@ -1,28 +1,44 @@
-/* clay_image.c -- the Clay plugin for stb
- *
- * It registers one prototype, ImageCore, whose objects each own a C struct.
- * src/main.clay wraps it in a Clay API. The C API is in clay_plugin.h (see
- * "Native plugins" in the Clay guide): values cross as opaque handles,
- * arguments are borrowed, and what a method returns is a new reference (or
- * its own receiver). The entry point must be named <plugin>_plugin_init.
- */
+//------------------------------------------------------------------------
+// image.c -- the Clay plugin for stb images
+//
+//  It registers one prototype, ImageCore, whose objects each own a C struct.
+//  src/main.clay wraps it in a Clay API: Image is a clone of ImageCore, so
+//  images have these methods. The ones named with a leading _ are internal
+//  (the constructors use them); the rest are public. The C API is in 
+//  clay_plugin.h (see "Native plugins" in the Clay guide): values cross as
+//  opaque handles, arguments are borrowed, and what a method returns is a 
+//  new reference (or its own receiver). The entry point must be named 
+//  <plugin>_plugin_init.
+//------------------------------------------------------------------------
+
 #include "clay_plugin.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+//------------------------------------------------------------------------
+// stb image implementation
+//------------------------------------------------------------------------
 #define STB_IMAGE_IMPLEMENTATION
 #   include "stb/stb_image.h"
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #   include "stb/stb_image_write.h"
 
+//------------------------------------------------------------------------
 // the Clay plugin API instance
+//------------------------------------------------------------------------
 static const ClayPluginAPI *api;
 
+//------------------------------------------------------------------------
 // minimum API version required by this plugin
+//------------------------------------------------------------------------
 #define MIN_API_VERSION 2
 
+#define SMALL_BUF 128
+
+//------------------------------------------------------------------------
 // what each image owns
+//------------------------------------------------------------------------
 typedef struct {
     unsigned char *data;    // pixel data
     int width;
@@ -34,8 +50,8 @@ static void replace_pixels(Image *img, unsigned char *data, int w, int h, int c)
 
 //------------------------------------------------------------------------
 // Image free callback
-// runs when the Clay object is freed
-// and releases the image's data
+//
+// It runs when the Clay object is freed and releases the image's data
 //------------------------------------------------------------------------
 static void image_free(void *data) { 
     Image *img = (Image *)data;
@@ -49,8 +65,9 @@ static void image_free(void *data) {
 }
 
 //------------------------------------------------------------------------
-// Image of callback
-// retrieves the C struct from the Clay object
+// Image 'of' helper function
+//
+// It retrieves the C struct from the Clay object
 //------------------------------------------------------------------------
 static Image *image_of(ClayPluginObject self) {
     Image *img = (Image *)api->get_data(self);
@@ -62,7 +79,9 @@ static Image *image_of(ClayPluginObject self) {
 }
 
 //------------------------------------------------------------------------
-// ImageCore create -> a new, empty image; self is the prototype
+// ImageCore _create -> a new, empty image; self is the prototype
+//
+// It allocates the C struct and associates it with the Clay object
 //------------------------------------------------------------------------
 static ClayPluginValue image_create(ClayPluginObject self, int argc, ClayPluginValue *argv) {
     (void)argc; (void)argv;
@@ -82,16 +101,20 @@ static ClayPluginValue image_create(ClayPluginObject self, int argc, ClayPluginV
 }
 
 //------------------------------------------------------------------------
-// Image load(path) -> the image, so calls chain
+// image _read(path)
+//
+// It loads the image from the specified path and updates the image's 
+// data, width, height, and channels
 //------------------------------------------------------------------------
-static ClayPluginValue image_load(ClayPluginObject self, int argc, ClayPluginValue *argv) {
+static ClayPluginValue image_read(ClayPluginObject self, int argc, ClayPluginValue *argv) {
     Image *img = image_of(self);
     
     if (!img) 
         return 0;
     
+    // check arguments
     if (argc < 1 || !api->is_string(argv[0])) {
-        api->raise("Image: load expects a string", "ArgumentError");
+        api->raise("Image: load expects a path String", "ArgumentError");
         return 0;
     }
 
@@ -99,6 +122,9 @@ static ClayPluginValue image_load(ClayPluginObject self, int argc, ClayPluginVal
     // load into locals so a failed load leaves the image as it was
     int w, h, c;
     unsigned char *data = stbi_load(api->to_string(argv[0]), &w, &h, &c, 0);
+
+    // check if the image was loaded successfully
+    // TODO: provide more detailed error information if available
     if (!data) {
         api->raise("Image: Failed to load image", "RuntimeError");
         return 0;
@@ -107,53 +133,66 @@ static ClayPluginValue image_load(ClayPluginObject self, int argc, ClayPluginVal
     // release any image loaded before
     replace_pixels(img, data, w, h, c);
 
+    // on success, return self for message chaining
     return (ClayPluginValue)self;
 }
 
 //------------------------------------------------------------------------
-// Image savePng -> saves the image as a PNG file
+// Image savePng(path)
+//
+// It saves the image as a PNG file
 //------------------------------------------------------------------------
 static ClayPluginValue image_save_png(ClayPluginObject self, int argc, ClayPluginValue *argv) {
     Image *img = image_of(self);
 
+    // ensure the image object is valid
     if (!img) 
         return 0;
 
+    // check arguments
     if (argc < 1 || !api->is_string(argv[0])) {
         api->raise("Image: savePng expects a string", "ArgumentError");
         return 0;
     }
 
+    // ensure the image has data before saving
     if (!img->data) {
         api->raise("Image: no image loaded", "RuntimeError");
         return 0;
     }
 
+    // attempt to write the image as a PNG file
     if (!stbi_write_png(api->to_string(argv[0]), img->width, img->height, img->channels, img->data, img->width * img->channels)) {
         api->raise("Image: Failed to save image", "RuntimeError");
         return 0;
     }
 
+    // on success, return self for message chaining
     return (ClayPluginValue)self;
 }
 
 //------------------------------------------------------------------------
-// Image info -> prints information about the image
+// Image info
+//
+// Prints information about the image
 //------------------------------------------------------------------------
 static ClayPluginValue image_info(ClayPluginObject self, int argc, ClayPluginValue *argv) {
     (void)argc; (void)argv;
 
+    // retrieve the image object from the plugin object
     Image *img = image_of(self);
 
+    // ensure the image object is valid
     if (!img)
         return 0;
 
+    // ensure the image has data before printing info
     if (!img->data) {
         api->raise("Image: no image loaded", "RuntimeError");
         return 0;
     }
 
-    char line[96];
+    char line[SMALL_BUF];
 
     snprintf(line, sizeof line, "Image: %d x %d, %d channels\n", img->width, img->height, img->channels);
 
@@ -163,48 +202,64 @@ static ClayPluginValue image_info(ClayPluginObject self, int argc, ClayPluginVal
     else
         fputs(line, stdout);
 
+    // return self for message chaining
     return (ClayPluginValue)self;
 }
 
 //------------------------------------------------------------------------
-// Image width -> the image's width
+// Image width
+//
+// -> the image's width
 //------------------------------------------------------------------------
 static ClayPluginValue image_width(ClayPluginObject self, int argc, ClayPluginValue *argv) {
     (void)argc; (void)argv;
 
+    // retrieve the image object from the plugin object
     Image *img = image_of(self);
 
+    // ensure the image object is valid
     if (!img) 
         return 0;
 
+    // return the image's width
     return api->make_int(img->width);
 }
 
 //------------------------------------------------------------------------
-// Image height -> the image's height
+// Image height
+//
+// -> the image's height
 //------------------------------------------------------------------------
 static ClayPluginValue image_height(ClayPluginObject self, int argc, ClayPluginValue *argv) {
     (void)argc; (void)argv;
 
+    // retrieve the image object from the plugin object
     Image *img = image_of(self);
 
+    // ensure the image object is valid
     if (!img) 
         return 0;
 
+    // return the image's height
     return api->make_int(img->height);
 }
 
 //------------------------------------------------------------------------
-// Image channels -> the number of channels (1 gray, 2 gray+alpha, 3 RGB, 4 RGBA)
+// Image channels
+//
+// -> the number of channels (1 gray, 2 gray+alpha, 3 RGB, 4 RGBA)
 //------------------------------------------------------------------------
 static ClayPluginValue image_channels(ClayPluginObject self, int argc, ClayPluginValue *argv) {
     (void)argc; (void)argv;
 
+    // retrieve the image object from the plugin object
     Image *img = image_of(self);
 
+    // ensure the image object is valid
     if (!img)
         return 0;
 
+    // return the number of channels
     return api->make_int(img->channels);
 }
 
@@ -214,20 +269,25 @@ static ClayPluginValue image_channels(ClayPluginObject self, int argc, ClayPlugi
 
 // the image's loaded pixels, or raise
 static Image *loaded_image_of(ClayPluginObject self) {
+    // retrieve the image object from the plugin object
     Image *img = image_of(self);
 
+    // ensure the image object is valid
     if (img && !img->data) {
         api->raise("Image: no image loaded", "RuntimeError");
         return NULL;
     }
-
+    
+    // return the image object if it has loaded pixels, or NULL if not
     return img;
 }
 
+//------------------------------------------------------------------------
 // read and check (width, height, channels) from argv[0..2]; returns the
 // pixel byte count, or 0 after raising
+//------------------------------------------------------------------------
 static size_t read_shape(const char *method, int argc, ClayPluginValue *argv, int *w, int *h, int *c) {
-    char msg[128];
+    char msg[SMALL_BUF];
 
     if (argc < 4 || !api->is_int(argv[0]) || !api->is_int(argv[1]) || !api->is_int(argv[2])) {
         snprintf(msg, sizeof msg, "Image: %s expects (width, height, channels, data)", method);
@@ -249,7 +309,9 @@ static size_t read_shape(const char *method, int argc, ClayPluginValue *argv, in
     return (size_t)iw * (size_t)ih * (size_t)ic;
 }
 
+//------------------------------------------------------------------------
 // give the image new pixels, freeing the old ones; data must come from STBI_MALLOC
+//------------------------------------------------------------------------
 static void replace_pixels(Image *img, unsigned char *data, int w, int h, int c) {
     if (img->data)
         stbi_image_free(img->data);
@@ -281,12 +343,16 @@ static ClayPluginValue image_pixels(ClayPluginObject self, int argc, ClayPluginV
 }
 
 //------------------------------------------------------------------------
-// Image setPixels(width, height, channels, bytes) -> the image, so calls chain
-// bytes is a String laid out as `pixels` returns
+// image _setPixels(width, height, channels, bytes) 
+//
+// -> the image (behind Image fromBytes) bytes is a String laid out 
+// as `pixels` returns
 //------------------------------------------------------------------------
 static ClayPluginValue image_set_pixels(ClayPluginObject self, int argc, ClayPluginValue *argv) {
+
+    // ensure the image object is valid and the API version is sufficient
     if (api->api_version < 4) {
-        api->raise("Image: setPixels needs Clay plugin API 4", "RuntimeError");
+        api->raise("Image: fromBytes needs Clay plugin API 4", "RuntimeError");
         return 0;
     }
 
@@ -296,7 +362,7 @@ static ClayPluginValue image_set_pixels(ClayPluginObject self, int argc, ClayPlu
         return 0;
 
     int w, h, c;
-    size_t n = read_shape("setPixels", argc, argv, &w, &h, &c);
+    size_t n = read_shape("fromBytes", argc, argv, &w, &h, &c);
 
     if (!n)
         return 0;
@@ -305,12 +371,12 @@ static ClayPluginValue image_set_pixels(ClayPluginObject self, int argc, ClayPlu
     const char *bytes = api->to_bytes(argv[3], &len);
 
     if (!bytes) {
-        api->raise("Image: setPixels expects a String of bytes", "ArgumentError");
+        api->raise("Image: fromBytes expects a String of bytes", "ArgumentError");
         return 0;
     }
 
     if (len != n) {
-        api->raise("Image: setPixels data must be width * height * channels bytes", "ArgumentError");
+        api->raise("Image: fromBytes data must be width * height * channels bytes", "ArgumentError");
         return 0;
     }
 
@@ -328,7 +394,9 @@ static ClayPluginValue image_set_pixels(ClayPluginObject self, int argc, ClayPlu
 }
 
 //------------------------------------------------------------------------
-// Image floats -> the pixels as a flat Array of numbers in 0..1 (byte / 255),
+// Image floats
+//
+// Return the pixels as a flat Array of numbers in 0..1 (byte / 255),
 // in the same order as `pixels`: ready to feed a neural network
 //------------------------------------------------------------------------
 static ClayPluginValue image_floats(ClayPluginObject self, int argc, ClayPluginValue *argv) {
@@ -358,7 +426,9 @@ static ClayPluginValue image_floats(ClayPluginObject self, int argc, ClayPluginV
 }
 
 //------------------------------------------------------------------------
-// Image setFloats(width, height, channels, numbers) -> the image, so calls chain
+// image _setFloats(width, height, channels, numbers)
+//
+// -> the image (behind Image fromFloats)
 // numbers is an Array (flat, or rows) of values in 0..1, laid out as `floats`
 // returns; values outside 0..1 are clamped. A spectrogram makes a 1-channel
 // (grayscale) image this way.
@@ -370,18 +440,18 @@ static ClayPluginValue image_set_floats(ClayPluginObject self, int argc, ClayPlu
         return 0;
 
     int w, h, c;
-    size_t n = read_shape("setFloats", argc, argv, &w, &h, &c);
+    size_t n = read_shape("fromFloats", argc, argv, &w, &h, &c);
 
     if (!n)
         return 0;
 
     if (!api->is_array(argv[3])) {
-        api->raise("Image: setFloats expects an Array of numbers", "ArgumentError");
+        api->raise("Image: fromFloats expects an Array of numbers", "ArgumentError");
         return 0;
     }
 
     if (api->to_floats(argv[3], NULL, 0) != n) {
-        api->raise("Image: setFloats data must be width * height * channels numbers", "ArgumentError");
+        api->raise("Image: fromFloats data must be width * height * channels numbers", "ArgumentError");
         return 0;
     }
 
@@ -408,6 +478,7 @@ static ClayPluginValue image_set_floats(ClayPluginObject self, int argc, ClayPlu
     free(f);
     replace_pixels(img, data, w, h, c);
 
+    // return the updated image object
     return (ClayPluginValue)self;
 }
 
@@ -415,17 +486,17 @@ static ClayPluginValue image_set_floats(ClayPluginObject self, int argc, ClayPlu
 // the list of methods for the Image prototype
 //------------------------------------------------------------------------
 static ClayPluginMethod methods[] = {
-    { "create", image_create },
-    { "load", image_load },
+    { "_create", image_create },
+    { "_read", image_read },
     { "savePng", image_save_png },
     { "width",  image_width },
     { "height", image_height },
     { "info", image_info },
     { "channels", image_channels },
     { "pixels", image_pixels },
-    { "setPixels", image_set_pixels },
+    { "_setPixels", image_set_pixels },
     { "floats", image_floats },
-    { "setFloats", image_set_floats },
+    { "_setFloats", image_set_floats },
     { NULL, NULL }
 };
 
@@ -433,14 +504,18 @@ static ClayPluginMethod methods[] = {
 // Register our Image type with the Clay plugin API
 //------------------------------------------------------------------------
 CLAY_PLUGIN_EXPORT void image_plugin_init(const ClayPluginAPI *clay_api) {
+    // save the Clay plugin API pointer for later use
     api = clay_api;
 
-    if (api->api_version < 2) {
+    // check if the API version is compatible
+    if (api->api_version < MIN_API_VERSION) {
         api->raise("Image: incompatible API version", "RuntimeError");
         return;
     }
 
+    // define the ImageCore type with its methods, free function, and size
     ClayPluginType def = { "ImageCore", methods, image_free, sizeof(void *) };
 
+    // register the ImageCore type with the Clay plugin API
     api->register_type(&def);
 }

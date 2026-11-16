@@ -11,7 +11,7 @@ then loaded into Clay, or linked into executables built with `clay --compile`.
 ```clay
 import("image")
 
-img = Image open("photo.png")
+img = Image load("photo.png")
 img info                          // Image: 640 x 480, 3 channels
 img savePng("copy.png")
 ```
@@ -22,34 +22,35 @@ img savePng("copy.png")
 
 | | |
 |---|---|
-| `Image open(path)` | A new image loaded from a file. Raises `RuntimeError` if it can't be read. |
+| `Image load(path)` | A new image loaded from a file. Raises `RuntimeError` if it can't be read. |
 | `Image fromBytes(w, h, c, bytes)` | A new image from a String of `w * h * c` pixel bytes. |
 | `Image fromFloats(w, h, c, numbers)` | A new image from an Array of `w * h * c` numbers in 0..1, flat or as rows. Values outside 0..1 are clamped. |
-| `Image new` | An empty image, to fill with `load`, `setPixels` or `setFloats`. |
 
 ### Image methods
 
 | | |
 |---|---|
-| `load(path)` | Loads a file into this image, replacing its pixels. A failed load leaves the image unchanged. |
 | `savePng(path)` | Saves the image as a PNG. |
 | `width`, `height` | The size in pixels. |
 | `channels` | 1 gray, 2 gray + alpha, 3 RGB, 4 RGBA. |
 | `info` | Prints the size and channel count. |
 | `pixels` | The pixels as a String of `width * height * channels` bytes. |
-| `setPixels(w, h, c, bytes)` | Replaces the pixels (and size) from bytes. |
 | `floats` | The pixels as a flat Array of numbers in 0..1 (each byte / 255). |
-| `setFloats(w, h, c, numbers)` | Replaces the pixels (and size) from numbers in 0..1. |
 
-Methods that change an image return it, so calls chain. Pixel data is laid out row by row, top
-to bottom, with channels interleaved (`RGBARGBA...`), in both bytes and floats. `pixels` and
-`setPixels` need Clay's plugin API 4 (Clay 0.3.3 or later).
+Images don't change once made: to work on another file, make another image
+(`img = Image load("b.png")`). The old one's pixels are freed when nothing refers to it.
+Constructors are sent to `Image` itself; sending one to an image (`img load(path)`) raises,
+since it would leave `img` as it was.
+
+Pixel data is laid out row by row, top to bottom, with channels interleaved (`RGBARGBA...`),
+in both bytes and floats. `pixels` and `fromBytes` need Clay's plugin API 4 (Clay 0.3.3 or
+later).
 
 Every image is an `Image`, so methods you add to `Image` reach all of them:
 
 ```clay
 Image setMethod("area", { self width * self height })
-(Image open("photo.png")) area println     // 307200
+(Image load("photo.png")) area println     // 307200
 ```
 
 ### Examples
@@ -57,7 +58,7 @@ Image setMethod("area", { self width * self height })
 Neural network input, one number per channel value:
 
 ```clay
-x = (Image open("digit.png")) floats     // e.g. 28 * 28 = 784 numbers for a gray image
+x = (Image load("digit.png")) floats     // e.g. 28 * 28 = 784 numbers for a gray image
 ```
 
 A grayscale image from data, such as a mel spectrogram scaled to 0..1 (one row per mel band):
@@ -76,6 +77,9 @@ Image fromFloats(frames, bands, 1, rows) savePng("spectrogram.png")
 - Don't `clone` an image: the clone has no pixel storage of its own, and its methods raise
   "not an image". Make images with the constructors above, and copy one with
   `Image fromBytes(img width, img height, img channels, img pixels)`.
+- `Image` is a clone of `ImageCore`, the prototype the C plugin registers, so `methods` also
+  lists the C layer's internal methods, named with a leading `_` (`_create`, `_read`,
+  `_setPixels`, `_setFloats`). They are not part of the API.
 
 ## Install
 
