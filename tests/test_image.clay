@@ -12,22 +12,55 @@ check = { |what, ok|
 
 raises = { |block| try { block value; "no error" } catch { |e| e type } }
 
-img = Image load("default.png")
+// open, load, save
+img = Image open("default.png")
 check("width", img width == 128)
 check("height", img height == 128)
-check("load chains", (img load("default.png")) width == 128)
+check("channels", img channels == 4)
+check("images are Images", img parent == Image)
+check("load reloads in place", (img load("default.png")) == img)
 
 out = "build/test_out.png"
 img savePng(out)
-copy = Image load(out)
+copy = Image open(out)
 check("round trip width", copy width == 128)
 check("round trip height", copy height == 128)
+check("round trip pixels", copy pixels == img pixels)
 
+// Clay methods added to Image reach every image
+Image setMethod("area", { self width * self height })
+check("Clay methods on images", img area == (128 * 128))
+
+// raw pixels
+check("pixels length", img pixels length == (128 * 128 * 4))
+check("fromBytes keeps pixels", (Image fromBytes(128, 128, 4, img pixels)) pixels == img pixels)
+check("setPixels reshapes", (Image new setPixels(2, 1, 1, String fromBytes([7, 200]))) pixels bytes == [7, 200])
+
+// floats
+f = img floats
+check("floats length", f size == (128 * 128 * 4))
+check("floats in 0..1", (f min >= 0) && (f max <= 1))
+check("floats round trip", (Image fromFloats(128, 128, 4, f)) pixels == img pixels)
+gray = Image fromFloats(3, 2, 1, [0, 0.5, 1, 2, -1, 0.25])
+check("fromFloats clamps and rounds", gray pixels bytes == [0, 128, 255, 255, 0, 64])
+check("fromFloats takes rows", (Image fromFloats(3, 2, 1, [[0, 0.5, 1], [2, -1, 0.25]])) pixels == gray pixels)
+gray savePng(out)
+check("grayscale saves and loads", (Image open(out)) pixels == gray pixels)
+
+// errors
 check("images are independent", (Image new) width == 0)
-check("missing file raises", (raises value({ Image load("no-such-file.png") })) == "RuntimeError")
-check("bad path raises", (raises value({ Image load(42) })) == "ArgumentError")
+check("missing file raises", (raises value({ Image open("no-such-file.png") })) == "RuntimeError")
+check("bad path raises", (raises value({ Image open(42) })) == "ArgumentError")
+check("failed load keeps the image", ((raises value({ img load("no-such-file.png") })) == "RuntimeError") && (img width == 128) && (img channels == 4))
 check("saving an empty image raises", (raises value({ Image new savePng(out) })) == "RuntimeError")
+check("pixels of an empty image raises", (raises value({ Image new pixels })) == "RuntimeError")
 check("bare prototype raises", (raises value({ ImageCore width })) == "RuntimeError")
+check("bare Image raises", (raises value({ Image width })) == "RuntimeError")
+check("wrong byte count raises", (raises value({ Image fromBytes(2, 2, 1, "abc") })) == "ArgumentError")
+check("wrong number count raises", (raises value({ Image fromFloats(2, 2, 1, [0, 1]) })) == "ArgumentError")
+check("bad channels raises", (raises value({ Image fromFloats(1, 1, 5, [0, 0, 0, 0, 0]) })) == "ArgumentError")
+check("zero width raises", (raises value({ Image fromBytes(0, 1, 1, "") })) == "ArgumentError")
+check("non-number raises", (raises value({ Image fromFloats(1, 1, 1, ["x"]) })) == "TypeError")
 
 // Did we pass all tests?!
 (failures > 0) ifTrue {

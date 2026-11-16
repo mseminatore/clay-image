@@ -4,20 +4,34 @@
 //   import("image")
 //
 // Example usage:
-//  img = Image load(path)  // Loads the image at the given path
+//  img = Image open(path)  // A new image loaded from the given path
+//  img load(path)          // Loads another image into img
 //  img savePng(path)       // Saves the image as a PNG at the given path
 //  img info                // Prints the image's size and channel count
 //  img width               // Returns the width of the image
 //  img height              // Returns the height of the image
+//  img channels            // 1 gray, 2 gray+alpha, 3 RGB, 4 RGBA
 //
-// How it fits together: `Image` (below) is Clay and only makes images. Each
-// image is a clone of `ImageCore`, the prototype the C plugin registers
-// (native/image.c), so its methods are written in C.
+// Raw data (row by row, top to bottom, channels interleaved):
+//  img pixels              // a String of width * height * channels bytes
+//  img floats              // a flat Array of numbers in 0..1, e.g. NN input
+//  Image fromBytes(w, h, c, bytes)     // a new image from pixel bytes
+//  Image fromFloats(w, h, c, numbers)  // from numbers in 0..1 (clamped),
+//                                      // e.g. a spectrogram with c = 1
+//
+// How it fits together: `ImageCore` is the prototype the C plugin registers
+// (native/image.c), and `Image` (below) is a clone of it. `self create` clones
+// whatever it is sent to and gives the clone its own pixels, so every image is
+// an `Image`: it has the C methods, and any Clay methods added here. The
+// constructor is `open`, not `load`, so that `load` stays the C method that
+// loads into an existing image.
 //
 // Every brick shares one set of top-level names with the program that imports
 // it, so keep yours few and distinctive.
 
 Image = ImageCore clone {
     new() { self create }
-    load(path) { ImageCore create load(path) }
+    open(path) { self create load(path) }
+    fromBytes(w, h, c, bytes) { self create setPixels(w, h, c, bytes) }
+    fromFloats(w, h, c, numbers) { self create setFloats(w, h, c, numbers) }
 }
