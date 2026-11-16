@@ -1,0 +1,4 @@
+# the plugin built on first use (clay native bricks)
+build/
+# bricks installed by `clay bricks install`
+bricks/

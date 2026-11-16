@@ -1,0 +1,16 @@
+{
+  "name": "image",
+  "version": "0.1.0",
+  "clay": ">=0.3.3",
+  "description": "TODO: what clay-image does, in one line",
+  "main": "src/main.clay",
+  "deps": {},
+  "native": {
+    "plugin": "clay_image",
+    "sources": [
+      "native/image.c"
+    ],
+    "cflags": [],
+    "libs": []
+  }
+}
