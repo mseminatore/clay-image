@@ -1,20 +1,18 @@
-// clay-image -- TODO: what this brick does, in one line
+// Image -- Provides basic image handling functionality
 //
 // Usage:
-//   import("clay-image")
+//   import("image")
 //
-//   c = ClayImage counter(10)
-//   c add(5)
-//   c value println          // 15
-//
-// How it fits together: `ClayImage` (below) is Clay and only makes counters. Each
-// counter is a clone of `ClayImageCore`, the prototype the C plugin registers
-// (native/clay_image.c), so its methods are written in C. Put the friendly API
-// here and the heavy work in C.
+// Example usage:
+//  image = Image clone
+//  image load(path)        // Loads the image at the given path
+//  image savePng(path)     // Saves the given image to the specified path
+//  image info(path)        // Prints information about the image at the given path
+//  image width             // Returns the width of the image
+//  image height            // Returns the height of the image
 //
 // Every brick shares one set of top-level names with the program that imports
 // it, so keep yours few and distinctive.
 
-ClayImage = Object clone {
-    counter(start = 0) { ClayImageCore create(start) }
+Image = Object clone {
 }
