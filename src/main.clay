@@ -4,15 +4,20 @@
 //   import("image")
 //
 // Example usage:
-//  image = Image clone
-//  image load(path)        // Loads the image at the given path
-//  image savePng(path)     // Saves the given image to the specified path
-//  image info(path)        // Prints information about the image at the given path
-//  image width             // Returns the width of the image
-//  image height            // Returns the height of the image
+//  img = Image load(path)  // Loads the image at the given path
+//  img savePng(path)       // Saves the image as a PNG at the given path
+//  img info                // Prints the image's size and channel count
+//  img width               // Returns the width of the image
+//  img height              // Returns the height of the image
+//
+// How it fits together: `Image` (below) is Clay and only makes images. Each
+// image is a clone of `ImageCore`, the prototype the C plugin registers
+// (native/image.c), so its methods are written in C.
 //
 // Every brick shares one set of top-level names with the program that imports
 // it, so keep yours few and distinctive.
 
-Image = Object clone {
+Image = ImageCore clone {
+    new() { self create }
+    load(path) { ImageCore create load(path) }
 }

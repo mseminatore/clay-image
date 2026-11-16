@@ -1,12 +1,13 @@
 /* clay_image.c -- the Clay plugin for stb
  *
- * It registers one prototype, Image, whose objects each own a C struct.
+ * It registers one prototype, ImageCore, whose objects each own a C struct.
  * src/main.clay wraps it in a Clay API. The C API is in clay_plugin.h (see
  * "Native plugins" in the Clay guide): values cross as opaque handles,
  * arguments are borrowed, and what a method returns is a new reference (or
  * its own receiver). The entry point must be named <plugin>_plugin_init.
  */
 #include "clay_plugin.h"
+#include <stdio.h>
 #include <stdlib.h>
 
 #define STB_IMAGE_IMPLEMENTATION
@@ -58,36 +59,27 @@ static Image *image_of(ClayPluginObject self) {
 }
 
 //------------------------------------------------------------------------
-// Image create(start) -> a new image; self is the prototype
+// ImageCore create -> a new, empty image; self is the prototype
 //------------------------------------------------------------------------
-// static ClayPluginValue image_create(ClayPluginObject self, int argc, ClayPluginValue *argv) {
-//     Image *img = (Image *)calloc(1, sizeof(Image));
+static ClayPluginValue image_create(ClayPluginObject self, int argc, ClayPluginValue *argv) {
+    (void)argc; (void)argv;
 
-//     if (!img) { 
-//         api->raise("clay-image: out of memory", "RuntimeError"); return 0; 
-//     }
+    Image *img = (Image *)calloc(1, sizeof(Image));
 
-//     if (argc > 0) {
-//         if (!api->is_int(argv[0])) {
-//             free(img);
+    if (!img) {
+        api->raise("Image: out of memory", "RuntimeError");
+        return 0;
+    }
 
-//             api->raise("create expects an integer", "ArgumentError");
+    ClayPluginObject obj = api->clone(self);
 
-//             return 0;
-//         }
+    api->set_data(obj, img);
 
-//         img->width = (int)api->to_int(argv[0]);
-//     }
-
-//     ClayPluginObject obj = api->clone(self);
-
-//     api->set_data(obj, img);
-
-//     return (ClayPluginValue)obj;
-// }
+    return (ClayPluginValue)obj;
+}
 
 //------------------------------------------------------------------------
-// Image add(n) -> the image, so calls chain
+// Image load(path) -> the image, so calls chain
 //------------------------------------------------------------------------
 static ClayPluginValue image_load(ClayPluginObject self, int argc, ClayPluginValue *argv) {
     Image *img = image_of(self);
@@ -107,6 +99,10 @@ static ClayPluginValue image_load(ClayPluginObject self, int argc, ClayPluginVal
         return 0;
     }
     
+    // release any image loaded before
+    if (img->data)
+        stbi_image_free(img->data);
+
     img->data = data;
 
     return (ClayPluginValue)self;
@@ -126,6 +122,11 @@ static ClayPluginValue image_save_png(ClayPluginObject self, int argc, ClayPlugi
         return 0;
     }
 
+    if (!img->data) {
+        api->raise("Image: no image loaded", "RuntimeError");
+        return 0;
+    }
+
     if (!stbi_write_png(api->to_string(argv[0]), img->width, img->height, img->channels, img->data, img->width * img->channels)) {
         api->raise("Image: Failed to save image", "RuntimeError");
         return 0;
@@ -142,13 +143,23 @@ static ClayPluginValue image_info(ClayPluginObject self, int argc, ClayPluginVal
 
     Image *img = image_of(self);
 
-    if (!img || !img->data)
+    if (!img)
         return 0;
 
-    // if (api->api_version >= 3)
-    //     api->write_output("Image: %d x %d, %d channels\n", img->width, img->height, img->channels);
-    // else
-        fprintf(stdout, "Image: %d x %d, %d channels\n", img->width, img->height, img->channels);
+    if (!img->data) {
+        api->raise("Image: no image loaded", "RuntimeError");
+        return 0;
+    }
+
+    char line[96];
+
+    snprintf(line, sizeof line, "Image: %d x %d, %d channels\n", img->width, img->height, img->channels);
+
+    // write_output reaches the Debug Console under --dap, where stdout does not
+    if (api->api_version >= 3)
+        api->write_output(line);
+    else
+        fputs(line, stdout);
 
     return (ClayPluginValue)self;
 }
@@ -185,6 +196,7 @@ static ClayPluginValue image_height(ClayPluginObject self, int argc, ClayPluginV
 // the list of methods for the Image prototype
 //------------------------------------------------------------------------
 static ClayPluginMethod methods[] = {
+    { "create", image_create },
     { "load", image_load },
     { "savePng", image_save_png },
     { "width",  image_width },
@@ -204,7 +216,7 @@ CLAY_PLUGIN_EXPORT void image_plugin_init(const ClayPluginAPI *clay_api) {
         return;
     }
 
-    ClayPluginType def = { "Image", methods, image_free, sizeof(void *) };
+    ClayPluginType def = { "ImageCore", methods, image_free, sizeof(void *) };
 
     api->register_type(&def);
 }

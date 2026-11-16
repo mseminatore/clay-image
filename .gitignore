@@ -2,3 +2,8 @@
 build/
 # bricks installed by `clay bricks install`
 bricks/
+
+*.png
+*.jpg
+*.bmp
+

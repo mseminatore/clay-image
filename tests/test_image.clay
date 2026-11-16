@@ -1,5 +1,5 @@
-// Tests for the clay-image brick. Run them from the brick's directory:
-//   clay tests/test_clay_image.clay
+// Tests for the image brick. Run them from the brick's directory:
+//   clay tests/test_image.clay
 // The first run builds the C plugin (into build/, which is not committed); a
 // brick can be imported by its own name from inside its own directory.
 import("image")
@@ -12,17 +12,22 @@ check = { |what, ok|
 
 raises = { |block| try { block value; "no error" } catch { |e| e type } }
 
-//c = ClayImage counter(10)
-//check value("start", c value == 10)
-//c add(5)
-//check value("add", c value == 15)
-//check value("add chains", ((c add(1)) add(2)) value == 18)
-//check value("default start", (ClayImage counter) value == 0)
+img = Image load("default.png")
+check("width", img width == 128)
+check("height", img height == 128)
+check("load chains", (img load("default.png")) width == 128)
 
-//d = ClayImage counter(1)
-//d add(1)
-//check value("counters are independent", ((c value) == 18) && ((d value) == 2))
-//check value("a bad argument raises", (raises value({ c add("x") })) == "ArgumentError")
+out = "build/test_out.png"
+img savePng(out)
+copy = Image load(out)
+check("round trip width", copy width == 128)
+check("round trip height", copy height == 128)
+
+check("images are independent", (Image new) width == 0)
+check("missing file raises", (raises value({ Image load("no-such-file.png") })) == "RuntimeError")
+check("bad path raises", (raises value({ Image load(42) })) == "ArgumentError")
+check("saving an empty image raises", (raises value({ Image new savePng(out) })) == "RuntimeError")
+check("bare prototype raises", (raises value({ ImageCore width })) == "RuntimeError")
 
 // Did we pass all tests?!
 (failures > 0) ifTrue {
