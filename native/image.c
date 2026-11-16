@@ -20,6 +20,9 @@
 // stb image implementation
 //------------------------------------------------------------------------
 #define STB_IMAGE_IMPLEMENTATION
+// stbi_failure_reason() gives messages written for users ("Image not of any
+// known type, or corrupt") instead of terse ones ("unknown image type")
+#define STBI_FAILURE_USERMSG
 #   include "stb/stb_image.h"
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #   include "stb/stb_image_write.h"
@@ -35,6 +38,7 @@ static const ClayPluginAPI *api;
 #define MIN_API_VERSION 2
 
 #define SMALL_BUF 128
+#define LARGE_BUF 512
 
 //------------------------------------------------------------------------
 // what each image owns
@@ -121,12 +125,17 @@ static ClayPluginValue image_read(ClayPluginObject self, int argc, ClayPluginVal
     // load the image and set its data, width, height and channels
     // load into locals so a failed load leaves the image as it was
     int w, h, c;
-    unsigned char *data = stbi_load(api->to_string(argv[0]), &w, &h, &c, 0);
+    const char *path = api->to_string(argv[0]);
+    unsigned char *data = stbi_load(path, &w, &h, &c, 0);
 
-    // check if the image was loaded successfully
-    // TODO: provide more detailed error information if available
+    // check if the image was loaded successfully, and if not say why
     if (!data) {
-        api->raise("Image: Failed to load image", "RuntimeError");
+        const char *reason = stbi_failure_reason();
+        char msg[LARGE_BUF];
+
+        // a very long path is cut short by snprintf, which is fine for a message
+        snprintf(msg, sizeof msg, "Image: can't load '%s': %s", path, reason ? reason : "unknown error");
+        api->raise(msg, "RuntimeError");
         return 0;
     }
     
@@ -172,38 +181,33 @@ static ClayPluginValue image_save_png(ClayPluginObject self, int argc, ClayPlugi
 }
 
 //------------------------------------------------------------------------
-// Image info
+// ImageCore _probe(path) -> [width, height, channels], or nil
 //
-// Prints information about the image
+// It reads only the file's header, without decoding the pixels, so it is
+// cheap. nil means stb can't read the file as an image. Image info wraps
+// it in a Dict. It needs no image, so self can be any ImageCore object.
 //------------------------------------------------------------------------
-static ClayPluginValue image_info(ClayPluginObject self, int argc, ClayPluginValue *argv) {
-    (void)argc; (void)argv;
+static ClayPluginValue image_probe(ClayPluginObject self, int argc, ClayPluginValue *argv) {
+    (void)self;
 
-    // retrieve the image object from the plugin object
-    Image *img = image_of(self);
-
-    // ensure the image object is valid
-    if (!img)
-        return 0;
-
-    // ensure the image has data before printing info
-    if (!img->data) {
-        api->raise("Image: no image loaded", "RuntimeError");
+    // check arguments
+    if (argc < 1 || !api->is_string(argv[0])) {
+        api->raise("Image: info expects a path String", "ArgumentError");
         return 0;
     }
 
-    char line[SMALL_BUF];
+    int w, h, c;
 
-    snprintf(line, sizeof line, "Image: %d x %d, %d channels\n", img->width, img->height, img->channels);
+    if (!stbi_info(api->to_string(argv[0]), &w, &h, &c))
+        return api->make_nil();
 
-    // write_output reaches the Debug Console under --dap, where stdout does not
-    if (api->api_version >= 3)
-        api->write_output(line);
-    else
-        fputs(line, stdout);
+    ClayPluginValue arr = api->array_new();
 
-    // return self for message chaining
-    return (ClayPluginValue)self;
+    api->array_push(arr, api->make_int(w));
+    api->array_push(arr, api->make_int(h));
+    api->array_push(arr, api->make_int(c));
+
+    return arr;
 }
 
 //------------------------------------------------------------------------
@@ -263,11 +267,13 @@ static ClayPluginValue image_channels(ClayPluginObject self, int argc, ClayPlugi
     return api->make_int(img->channels);
 }
 
-//------------------------------------------------------------------------
+//[]------------------------------------------------------------------------[]
 // shared helpers for reading and replacing pixels
-//------------------------------------------------------------------------
+//[]------------------------------------------------------------------------[]
 
+//------------------------------------------------------------------------
 // the image's loaded pixels, or raise
+//------------------------------------------------------------------------
 static Image *loaded_image_of(ClayPluginObject self) {
     // retrieve the image object from the plugin object
     Image *img = image_of(self);
@@ -356,40 +362,49 @@ static ClayPluginValue image_set_pixels(ClayPluginObject self, int argc, ClayPlu
         return 0;
     }
 
+    // ensure the method name matches the function being implemented
     Image *img = image_of(self);
 
+    // ensure the image object is valid
     if (!img)
         return 0;
 
     int w, h, c;
     size_t n = read_shape("fromBytes", argc, argv, &w, &h, &c);
 
+    // ensure the shape was read successfully
     if (!n)
         return 0;
 
     size_t len = 0;
     const char *bytes = api->to_bytes(argv[3], &len);
 
+    // ensure the bytes argument is valid
     if (!bytes) {
         api->raise("Image: fromBytes expects a String of bytes", "ArgumentError");
         return 0;
     }
 
+    // ensure the byte count matches the expected shape
     if (len != n) {
         api->raise("Image: fromBytes data must be width * height * channels bytes", "ArgumentError");
         return 0;
     }
 
+    // allocate memory for the new pixel data
     unsigned char *data = (unsigned char *)STBI_MALLOC(n);
 
+    // check if memory allocation succeeded
     if (!data) {
         api->raise("Image: out of memory", "RuntimeError");
         return 0;
     }
 
+    // copy the bytes into the newly allocated memory and replace the image's pixels
     memcpy(data, bytes, n);
     replace_pixels(img, data, w, h, c);
 
+    // return the image object itself for method chaining
     return (ClayPluginValue)self;
 }
 
@@ -400,28 +415,37 @@ static ClayPluginValue image_set_pixels(ClayPluginObject self, int argc, ClayPlu
 // in the same order as `pixels`: ready to feed a neural network
 //------------------------------------------------------------------------
 static ClayPluginValue image_floats(ClayPluginObject self, int argc, ClayPluginValue *argv) {
-    (void)argc; (void)argv;
+    CLAY_UNUSED(argc); 
+    CLAY_UNUSED(argv);
 
+    // get the loaded image object
     Image *img = loaded_image_of(self);
 
+    // ensure the image is loaded
     if (!img)
         return 0;
 
+    // compute the total number of pixels times channels
     size_t n = (size_t)img->width * img->height * img->channels;
     float *f = (float *)malloc(n * sizeof(float));
 
+    // allocate memory for the float array
     if (!f) {
         api->raise("Image: out of memory", "RuntimeError");
         return 0;
     }
 
+    // convert each byte to a float in 0..1
     for (size_t i = 0; i < n; i++)
         f[i] = img->data[i] / 255.0f;
 
+    // create a Clay array from the float data
     ClayPluginValue arr = api->from_floats(f, n, 0);
 
+    // free the temporary float array after creating the Clay array
     free(f);
 
+    // return the Clay array containing the float representation of the image pixels
     return arr;
 }
 
@@ -434,30 +458,37 @@ static ClayPluginValue image_floats(ClayPluginObject self, int argc, ClayPluginV
 // (grayscale) image this way.
 //------------------------------------------------------------------------
 static ClayPluginValue image_set_floats(ClayPluginObject self, int argc, ClayPluginValue *argv) {
+    // get the image object associated with this Clay object
     Image *img = image_of(self);
 
+    // ensure the image object is valid
     if (!img)
         return 0;
 
     int w, h, c;
+    // read the shape (width, height, channels) from the arguments
     size_t n = read_shape("fromFloats", argc, argv, &w, &h, &c);
 
     if (!n)
         return 0;
 
+    // ensure the fourth argument is an array of numbers
     if (!api->is_array(argv[3])) {
         api->raise("Image: fromFloats expects an Array of numbers", "ArgumentError");
         return 0;
     }
 
+    // ensure the array has the correct number of elements
     if (api->to_floats(argv[3], NULL, 0) != n) {
         api->raise("Image: fromFloats data must be width * height * channels numbers", "ArgumentError");
         return 0;
     }
 
+    // allocate memory for the float array and the image data
     float *f = (float *)malloc(n * sizeof(float));
     unsigned char *data = (unsigned char *)STBI_MALLOC(n);
 
+    // check if memory allocation succeeded
     if (!f || !data) {
         free(f);
         STBI_FREE(data);
@@ -465,8 +496,10 @@ static ClayPluginValue image_set_floats(ClayPluginObject self, int argc, ClayPlu
         return 0;
     }
 
+    // convert the Clay array to floats
     api->to_floats(argv[3], f, n);
 
+    // clamp the float values to 0..1 and convert to bytes
     for (size_t i = 0; i < n; i++) {
         float v = f[i];
 
@@ -475,6 +508,7 @@ static ClayPluginValue image_set_floats(ClayPluginObject self, int argc, ClayPlu
         data[i] = (unsigned char)(v * 255.0f + 0.5f);
     }
 
+    // free the temporary float array and replace the image's pixels
     free(f);
     replace_pixels(img, data, w, h, c);
 
@@ -491,7 +525,7 @@ static ClayPluginMethod methods[] = {
     { "savePng", image_save_png },
     { "width",  image_width },
     { "height", image_height },
-    { "info", image_info },
+    { "_probe", image_probe },
     { "channels", image_channels },
     { "pixels", image_pixels },
     { "_setPixels", image_set_pixels },

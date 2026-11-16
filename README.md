@@ -12,8 +12,10 @@ then loaded into Clay, or linked into executables built with `clay --compile`.
 import("image")
 
 img = Image load("photo.png")
-img info                          // Image: 640 x 480, 3 channels
+img println                       // Image(640 x 480, 3 channels)
 img savePng("copy.png")
+
+Image info("photo.png")           // {width: 640, height: 480, channels: 3}, without decoding
 ```
 
 ## API
@@ -26,6 +28,12 @@ img savePng("copy.png")
 | `Image fromBytes(w, h, c, bytes)` | A new image from a String of `w * h * c` pixel bytes. |
 | `Image fromFloats(w, h, c, numbers)` | A new image from an Array of `w * h * c` numbers in 0..1, flat or as rows. Values outside 0..1 are clamped. |
 
+### Reading a file's size
+
+| | |
+|---|---|
+| `Image info(path)` | A Dict `#{width:, height:, channels:}` read from the file's header, without decoding the pixels, so it's cheap enough to scan a whole dataset. `nil` if the file is missing or isn't an image stb can read. |
+
 ### Image methods
 
 | | |
@@ -33,9 +41,9 @@ img savePng("copy.png")
 | `savePng(path)` | Saves the image as a PNG. |
 | `width`, `height` | The size in pixels. |
 | `channels` | 1 gray, 2 gray + alpha, 3 RGB, 4 RGBA. |
-| `info` | Prints the size and channel count. |
 | `pixels` | The pixels as a String of `width * height * channels` bytes. |
 | `floats` | The pixels as a flat Array of numbers in 0..1 (each byte / 255). |
+| `toString` | `"Image(640 x 480, 3 channels)"`, so `println` and `+` show an image's size. |
 
 Images don't change once made: to work on another file, make another image
 (`img = Image load("b.png")`). The old one's pixels are freed when nothing refers to it.
@@ -43,8 +51,7 @@ Constructors are sent to `Image` itself; sending one to an image (`img load(path
 since it would leave `img` as it was.
 
 Pixel data is laid out row by row, top to bottom, with channels interleaved (`RGBARGBA...`),
-in both bytes and floats. `pixels` and `fromBytes` need Clay's plugin API 4 (Clay 0.3.3 or
-later).
+in both bytes and floats. The brick needs Clay 0.3.4 or later.
 
 Every image is an `Image`, so methods you add to `Image` reach all of them:
 
@@ -79,7 +86,7 @@ Image fromFloats(frames, bands, 1, rows) savePng("spectrogram.png")
   `Image fromBytes(img width, img height, img channels, img pixels)`.
 - `Image` is a clone of `ImageCore`, the prototype the C plugin registers, so `methods` also
   lists the C layer's internal methods, named with a leading `_` (`_create`, `_read`,
-  `_setPixels`, `_setFloats`). They are not part of the API.
+  `_setPixels`, `_setFloats`, `_probe`). They are not part of the API.
 
 ## Install
 
