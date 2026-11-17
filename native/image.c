@@ -517,6 +517,203 @@ static ClayPluginValue image_set_floats(ClayPluginObject self, int argc, ClayPlu
 }
 
 //------------------------------------------------------------------------
+// a growing buffer stb_image_write's PNG encoder writes into
+//------------------------------------------------------------------------
+typedef struct {
+    unsigned char *data;
+    size_t len;
+    size_t cap;
+    int failed;
+} ByteBuf;
+
+static void bytebuf_write(void *context, void *data, int size) {
+    ByteBuf *b = (ByteBuf *)context;
+
+    if (b->failed || size <= 0)
+        return;
+
+    if (b->len + (size_t)size > b->cap) {
+        size_t cap = b->cap ? b->cap * 2 : 4096;
+
+        while (cap < b->len + (size_t)size)
+            cap *= 2;
+
+        unsigned char *grown = (unsigned char *)realloc(b->data, cap);
+        if (!grown) {
+            b->failed = 1;
+            return;
+        }
+
+        b->data = grown;
+        b->cap = cap;
+    }
+
+    memcpy(b->data + b->len, data, (size_t)size);
+    b->len += (size_t)size;
+}
+
+//------------------------------------------------------------------------
+// image pngBytes
+//
+// -> the image encoded as a PNG file, a String of bytes: what savePng
+// writes, without the file (to embed in an SVG or send over HTTP)
+//------------------------------------------------------------------------
+static ClayPluginValue image_png_bytes(ClayPluginObject self, int argc, ClayPluginValue *argv) {
+    CLAY_UNUSED(argc);
+    CLAY_UNUSED(argv);
+
+    if (api->api_version < 4) {
+        api->raise("Image: pngBytes needs Clay plugin API 4", "RuntimeError");
+        return 0;
+    }
+
+    Image *img = loaded_image_of(self);
+
+    if (!img)
+        return 0;
+
+    ByteBuf buf = { NULL, 0, 0, 0 };
+    int ok = stbi_write_png_to_func(bytebuf_write, &buf, img->width, img->height, img->channels,
+                                    img->data, img->width * img->channels);
+
+    if (!ok || buf.failed) {
+        free(buf.data);
+        api->raise("Image: couldn't encode the PNG", "RuntimeError");
+        return 0;
+    }
+
+    ClayPluginValue bytes = api->make_bytes(buf.data, buf.len);
+    free(buf.data);
+    return bytes;
+}
+
+//------------------------------------------------------------------------
+// image _setMapped(width, height, numbers, palette, lo, hi)
+//
+// -> the image (behind Image colormap)
+// Each of the width * height numbers (flat, or rows) picks a colour from
+// palette, a String of r, g, b bytes for 2 or more colours: lo the first,
+// hi the last, and the ones between in proportion, blending neighbouring
+// colours. Values outside lo..hi take the end colours. lo and hi may be nil:
+// then they are the smallest and largest numbers. A NaN leaves its pixel
+// transparent, and makes the image RGBA; otherwise it is RGB.
+//------------------------------------------------------------------------
+static ClayPluginValue image_set_mapped(ClayPluginObject self, int argc, ClayPluginValue *argv) {
+    if (api->api_version < 4) {
+        api->raise("Image: colormap needs Clay plugin API 4", "RuntimeError");
+        return 0;
+    }
+
+    Image *img = image_of(self);
+
+    if (!img)
+        return 0;
+
+    if (argc < 4 || !api->is_int(argv[0]) || !api->is_int(argv[1])) {
+        api->raise("Image: colormap expects (width, height, numbers, palette, lo, hi)", "ArgumentError");
+        return 0;
+    }
+
+    intptr_t iw = api->to_int(argv[0]), ih = api->to_int(argv[1]);
+
+    if (iw < 1 || ih < 1 || iw > 65536 || ih > 65536 || (size_t)iw * (size_t)ih > ((size_t)1 << 28)) {
+        api->raise("Image: colormap width and height must be 1 to 65536 and not too large together", "ArgumentError");
+        return 0;
+    }
+
+    int w = (int)iw, h = (int)ih;
+    size_t n = (size_t)w * h;
+
+    if (!api->is_array(argv[2]) || api->to_floats(argv[2], NULL, 0) != n) {
+        api->raise("Image: colormap needs width * height numbers (flat, or rows)", "ArgumentError");
+        return 0;
+    }
+
+    size_t plen = 0;
+    const unsigned char *pal = (const unsigned char *)api->to_bytes(argv[3], &plen);
+
+    if (!pal || plen < 6 || plen % 3 != 0) {
+        api->raise("Image: colormap palette must be a String of r, g, b bytes for 2 or more colours", "ArgumentError");
+        return 0;
+    }
+
+    float *f = (float *)malloc(n * sizeof(float));
+
+    if (!f) {
+        api->raise("Image: out of memory", "RuntimeError");
+        return 0;
+    }
+
+    api->to_floats(argv[2], f, n);
+
+    // the range: given, or the data's own (ignoring NaN)
+    int has_nan = 0;
+    float lo = 0.0f, hi = 0.0f;
+    int seen = 0;
+
+    for (size_t i = 0; i < n; i++) {
+        float v = f[i];
+
+        if (v != v) {
+            has_nan = 1;
+            continue;
+        }
+
+        if (!seen || v < lo) lo = v;
+        if (!seen || v > hi) hi = v;
+        seen = 1;
+    }
+
+    if (argc > 4 && !api->is_nil(argv[4])) lo = api->is_int(argv[4]) ? (float)api->to_int(argv[4]) : api->to_float(argv[4]);
+    if (argc > 5 && !api->is_nil(argv[5])) hi = api->is_int(argv[5]) ? (float)api->to_int(argv[5]) : api->to_float(argv[5]);
+
+    int c = has_nan ? 4 : 3;
+    unsigned char *data = (unsigned char *)STBI_MALLOC(n * (size_t)c);
+
+    if (!data) {
+        free(f);
+        api->raise("Image: out of memory", "RuntimeError");
+        return 0;
+    }
+
+    int colors = (int)(plen / 3);
+    float span = hi - lo;
+
+    for (size_t i = 0; i < n; i++) {
+        unsigned char *px = data + i * (size_t)c;
+        float v = f[i];
+
+        if (v != v) {
+            px[0] = px[1] = px[2] = px[3] = 0;
+            continue;
+        }
+
+        // position along the palette, 0 .. colors - 1
+        float t = span > 0.0f ? (v - lo) / span : 0.5f;
+        t = !(t > 0.0f) ? 0.0f : (t > 1.0f ? 1.0f : t);
+
+        float pos = t * (float)(colors - 1);
+        int k = (int)pos;
+
+        if (k >= colors - 1)
+            k = colors - 2;
+
+        float frac = pos - (float)k;
+        const unsigned char *a = pal + 3 * k, *b = a + 3;
+
+        for (int ch = 0; ch < 3; ch++)
+            px[ch] = (unsigned char)(a[ch] + (b[ch] - a[ch]) * frac + 0.5f);
+
+        if (c == 4)
+            px[3] = 255;
+    }
+
+    free(f);
+    replace_pixels(img, data, w, h, c);
+    return (ClayPluginValue)self;
+}
+
+//------------------------------------------------------------------------
 // the list of methods for the Image prototype
 //------------------------------------------------------------------------
 static ClayPluginMethod methods[] = {
@@ -531,6 +728,8 @@ static ClayPluginMethod methods[] = {
     { "_setPixels", image_set_pixels },
     { "floats", image_floats },
     { "_setFloats", image_set_floats },
+    { "_setMapped", image_set_mapped },
+    { "pngBytes", image_png_bytes },
     { NULL, NULL }
 };
 

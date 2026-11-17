@@ -7,7 +7,11 @@
 //   img = Image fromBytes(w, h, c, bytes)     // from pixel bytes
 //   img = Image fromFloats(w, h, c, numbers)  // from numbers in 0..1
 //                                             // (clamped), e.g. a spectrogram
-//   Image info(path)         // #{width:, height:, channels:} from the file's
+//   img = Image colormap(w, h, numbers, palette, lo, hi)
+//                            // numbers coloured through a palette (a String
+//                            // of r, g, b bytes); lo and hi default to the
+//                            // data's range, and NaN pixels are transparent
+//   Image info(path)        // #{width:, height:, channels:} from the file's
 //                            // header, without decoding; nil if not an image
 //
 //   img width, img height    // size in pixels
@@ -15,6 +19,7 @@
 //   img pixels               // a String of width * height * channels bytes
 //   img floats               // a flat Array of numbers in 0..1, e.g. NN input
 //   img savePng(path)        // saves as PNG
+//   img pngBytes             // the PNG file as a String of bytes
 //   img toString             // "Image(640 x 480, 3 channels)", so println works
 //
 // Pixel data is row by row, top to bottom, channels interleaved.
@@ -32,6 +37,7 @@ Image = ImageCore clone {
     load(path) { self _blank _read(path) }
     fromBytes(w, h, c, bytes) { self _blank _setPixels(w, h, c, bytes) }
     fromFloats(w, h, c, numbers) { self _blank _setFloats(w, h, c, numbers) }
+    colormap(w, h, numbers, palette, lo = nil, hi = nil) { self _blank _setMapped(w, h, numbers, palette, lo, hi) }
 
     // A file's size and channels, read from its header without decoding the
     // pixels: cheap enough to scan a whole dataset. nil if it isn't an image.
@@ -51,7 +57,7 @@ Image = ImageCore clone {
     // image and leave img as it was, which is never what was meant.
     _blank() {
         (self == Image) ifFalse {
-            raise("Image: make images with Image load, fromBytes or fromFloats; images don't change once made")
+            raise("Image: make images with Image load, fromBytes, fromFloats or colormap; images don't change once made")
         }
         Image _create
     }

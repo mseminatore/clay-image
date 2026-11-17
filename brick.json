@@ -1,6 +1,6 @@
 {
   "name": "image",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "clay": ">=0.3.4",
   "description": "Provides basic image reading and writing capabilities",
   "main": "src/main.clay",

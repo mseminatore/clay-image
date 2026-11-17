@@ -27,6 +27,7 @@ Image info("photo.png")           // {width: 640, height: 480, channels: 3}, wit
 | `Image load(path)` | A new image loaded from a file. Raises `RuntimeError` if it can't be read. |
 | `Image fromBytes(w, h, c, bytes)` | A new image from a String of `w * h * c` pixel bytes. |
 | `Image fromFloats(w, h, c, numbers)` | A new image from an Array of `w * h * c` numbers in 0..1, flat or as rows. Values outside 0..1 are clamped. |
+| `Image colormap(w, h, numbers, palette, lo, hi)` | A new RGB image from `w * h` numbers (flat or as rows), each coloured through `palette`: a String of r, g, b bytes for 2 or more colours, `lo` taking the first and `hi` the last, with neighbouring colours blended in between. Values outside `lo..hi` take the end colours. `lo` and `hi` default to the smallest and largest number. A NaN leaves its pixel transparent (and the image is then RGBA). This is how a heatmap, a weight matrix or a spectrogram becomes an image. |
 
 ### Reading a file's size
 
@@ -39,6 +40,7 @@ Image info("photo.png")           // {width: 640, height: 480, channels: 3}, wit
 | | |
 |---|---|
 | `savePng(path)` | Saves the image as a PNG. |
+| `pngBytes` | The PNG file `savePng` would write, as a String of bytes: to embed in an SVG or HTML page, or send over HTTP. |
 | `width`, `height` | The size in pixels. |
 | `channels` | 1 gray, 2 gray + alpha, 3 RGB, 4 RGBA. |
 | `pixels` | The pixels as a String of `width * height * channels` bytes. |
@@ -72,6 +74,14 @@ A grayscale image from data, such as a mel spectrogram scaled to 0..1 (one row p
 
 ```clay
 Image fromFloats(frames, bands, 1, rows) savePng("spectrogram.png")
+```
+
+The same in colour, from the raw values (no scaling needed), through a palette that runs from
+dark blue to yellow:
+
+```clay
+palette = String fromBytes([68, 1, 84, 33, 145, 140, 253, 231, 37])
+Image colormap(frames, bands, rows, palette) savePng("spectrogram.png")
 ```
 
 ### Notes
