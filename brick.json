@@ -2,15 +2,17 @@
   "name": "image",
   "version": "0.2.0",
   "clay": ">=0.3.4",
-  "description": "Provides basic image reading and writing capabilities",
+  "description": "Image reading and writing (stb_image), colormaps, and an anti-aliased drawing Canvas with text",
   "main": "src/main.clay",
   "deps": {},
   "native": {
     "plugin": "image",
     "sources": [
-      "native/image.c"
+      "native/image.c",
+      "native/canvas.c"
     ],
     "cflags": [],
-    "libs": []
+    "libs": [],
+    "libs-linux": ["-lm"]
   }
 }

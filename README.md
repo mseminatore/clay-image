@@ -2,7 +2,8 @@
 
 Image reading and writing for [Clay](https://github.com/mseminatore/clay), built on
 [stb_image](https://github.com/nothings/stb). It loads PNG, JPEG, BMP, GIF, TGA, PSD, HDR, PIC
-and PNM files, saves PNG, and exposes pixels as bytes or as numbers in 0..1. That makes it easy
+and PNM files, saves PNG, exposes pixels as bytes or as numbers in 0..1, and draws on a
+Canvas (anti-aliased shapes, lines and text). That makes it easy
 to feed images to a neural network, or to turn data such as a mel spectrogram into an image.
 
 This is a **native brick**: its C sources are compiled the first time you import it,
@@ -96,7 +97,52 @@ Image colormap(frames, bands, rows, palette) savePng("spectrogram.png")
   `Image fromBytes(img width, img height, img channels, img pixels)`.
 - `Image` is a clone of `ImageCore`, the prototype the C plugin registers, so `methods` also
   lists the C layer's internal methods, named with a leading `_` (`_create`, `_read`,
-  `_setPixels`, `_setFloats`, `_probe`). They are not part of the API.
+  `_setPixels`, `_setFloats`, `_setMapped`, `_probe`). They are not part of the API. In the
+  same way `Canvas` is a clone of `CanvasCore`.
+
+## Drawing: Canvas
+
+A `Canvas` is pixels you draw on, anti-aliased: shapes, lines and text. It is what
+[clay-plot](https://github.com/mseminatore/clay-plot) draws PNG charts with.
+
+```clay
+c = Canvas new(400, 300)                       // white; Canvas new(w, h, color) for another
+c fillRect(10, 10, 100, 50, "#1f77b4")
+c strokePolyline([[10, 200], [100, 120], [200, 180]], [214, 39, 40], 2, #{join: "round"})
+c fillCircle(300, 80, 30, [44, 160, 44, 0.5])  // half transparent
+c text("Hello, Clay", 200, 280, 24, "#000", #{anchor: "middle"})
+c savePng("drawing.png")
+```
+
+Coordinates are pixels from the top left and can be fractions. A colour is `"#rrggbb"`,
+`"#rgb"`, `[r, g, b]` or `[r, g, b, alpha]` (r, g, b in 0..255, alpha in 0..1). Points are
+`[[x, y], ...]` or flat `[x0, y0, x1, y1, ...]`. Drawing methods return the canvas.
+
+| | |
+|---|---|
+| `Canvas new(w, h, background)` | A new canvas (up to 16384 x 16384), filled with `background` (white). `[0, 0, 0, 0]` makes it transparent. |
+| `fillRect(x, y, w, h, color)`, `strokeRect(x, y, w, h, color, width)` | Rectangles |
+| `fillPolygon(points, color, opts)` | A filled polygon. `opts`: `evenOdd: true` leaves holes where it overlaps itself. |
+| `fillPaths(paths, color, opts)` | Several polygons in one fill: overlaps are drawn once, and with `evenOdd: true` inner ones cut holes. |
+| `fillCircle(cx, cy, r, color)`, `strokeCircle(cx, cy, r, color, width)` | Circles |
+| `fillCircles(centres, radius, color)` | Many circles at once (one radius, or one per centre): fast for scatter plots |
+| `line(x1, y1, x2, y2, color, width, opts)` | A line |
+| `strokePolyline(points, color, width, opts)` | A line through points. `opts`: `cap` (`"butt"`, `"round"`, `"square"`), `join` (`"round"`, `"miter"`, `"bevel"`), `dash` (an Array of on and off lengths), `closed`. A semi-transparent line is drawn once where it crosses itself or turns. |
+| `strokePaths(paths, color, width, opts)` | Several lines in one stroke, with the same options |
+| `text(s, x, y, size, color, opts)` | Text with its baseline at `y`, `size` pixels to the em. `opts`: `anchor` (`"start"`, `"middle"`, `"end"`: where `x` is along the text), `angle` (degrees, counter-clockwise). |
+| `textWidth(s, size)` | The text's width in pixels (also on `Canvas` itself, with no canvas) |
+| `drawImage(img, x, y, w, h, opts)` | An `Image` stretched over the rectangle (its own size if `w`, `h` are left out), nearest pixel. `opts`: `alpha`, `flipY`. |
+| `clip(x, y, w, h)`, `unclip` | Draw only inside the rectangle; draw anywhere again |
+| `width`, `height`, `rgba` | The size, and the pixels as a String of `width * height * 4` bytes (RGBA) |
+| `toImage`, `savePng(path)`, `pngBytes` | The drawing as an RGBA `Image`, a PNG file or a PNG's bytes |
+
+Text is drawn with DejaVu Sans (the font matplotlib uses), built into the plugin, so compiled
+programs need no font file. It covers Latin-1, Greek, dashes, curly quotes, the minus sign
+and a few symbols (≤ ≥ × ∞); other characters show as a box.
+
+Each fill or stroke is one anti-aliased pass (8 samples down each pixel, exact coverage across),
+so the pieces of a shape never blend twice where they overlap. Shapes from separate calls do,
+as on paper.
 
 ## Install
 
@@ -118,15 +164,20 @@ Per-platform flags go in `cflags-macos`, `libs-linux`, `sources-windows` and so 
 
 ## Third-party code
 
-`native/stb/` holds `stb_image.h` and `stb_image_write.h` from
+`native/stb/` holds `stb_image.h`, `stb_image_write.h` and `stb_truetype.h` from
 [nothings/stb](https://github.com/nothings/stb), public domain or MIT (see
 `native/stb/LICENSE`). `native/stb/VERSION` records the commit. To upgrade, download the
-two headers and `LICENSE` from a newer commit and update `VERSION`.
+three headers and `LICENSE` from a newer commit and update `VERSION`.
+
+`native/font/` holds the Canvas font, a subset of DejaVu Sans 2.37 under its own licence
+(`native/font/LICENSE`); `native/font/README.md` says how it was made and how to remake
+`dejavu_sans.h`, the C array the plugin compiles in.
 
 ## Testing
 
 ```sh
 clay tests/test_image.clay       # builds the plugin on first use; a brick imports itself by name
+clay tests/test_canvas.clay
 ```
 
 The plugin is cached in `build/` (not committed); delete it to force a rebuild. To

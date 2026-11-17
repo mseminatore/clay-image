@@ -1,0 +1,137 @@
+// Tests for Canvas, the image brick's drawing surface. Run them from the
+// brick's directory:
+//   clay tests/test_canvas.clay
+// They check pixels the drawing must set (or leave alone), and write files
+// only to a temporary directory, which they remove.
+import("image")
+
+failures = 0
+
+check = { |what, ok|
+    ok ifFalse { ("FAIL: " + what) println; failures = failures + 1 }
+}
+
+raises = { |block| try { block value; "no error" } catch { |e| e type } }
+
+// the pixel [r, g, b, a] at x, y of a canvas
+pixelAt = { |c, x, y|
+    b = c rgba
+    i = ((y * c width) + x) * 4
+    [b byteAt(i), b byteAt(i + 1), b byteAt(i + 2), b byteAt(i + 3)]
+}
+
+// making canvases
+c = Canvas new(40, 30)
+check("size", (c width == 40) && (c height == 30))
+check("white by default", pixelAt value(c, 0, 0) == [255, 255, 255, 255])
+check("toString", c toString == "Canvas(40 x 30)")
+check("Canvas toString", Canvas toString == "Canvas")
+check("background colour", pixelAt value(Canvas new(2, 2, "#102030"), 1, 1) == [16, 32, 48, 255])
+check("transparent background", pixelAt value(Canvas new(2, 2, [0, 0, 0, 0]), 0, 0) == [0, 0, 0, 0])
+check("rgba size", c rgba length == (40 * 30 * 4))
+
+// filled shapes cover whole pixels inside, and leave the outside alone
+c fillRect(10, 10, 10, 5, [255, 0, 0])
+check("rect inside", pixelAt value(c, 15, 12) == [255, 0, 0, 255])
+check("rect edge pixel is fully covered", pixelAt value(c, 10, 10) == [255, 0, 0, 255])
+check("rect outside", pixelAt value(c, 9, 12) == [255, 255, 255, 255])
+check("rect ends at x + w", pixelAt value(c, 20, 12) == [255, 255, 255, 255])
+
+// anti-aliasing: half a pixel covered is half way
+c = Canvas new(10, 10)
+c fillRect(2, 2, 4.5, 4, "#000")
+half = pixelAt value(c, 6, 3)
+check("half-covered pixel is grey", (half at(0) > 110) && (half at(0) < 145))
+
+// alpha blends with what is there
+c = Canvas new(4, 4)
+c fillRect(0, 0, 4, 4, [0, 0, 255, 0.5])
+check("alpha blends", pixelAt value(c, 1, 1) == [128, 128, 255, 255])
+
+// overlapping parts of one stroke are drawn once
+c = Canvas new(40, 40)
+c strokePolyline([[5, 20], [20, 20], [20, 5]], [0, 0, 0, 0.5], 6, #{join: "round"})
+check("stroke joins blend once", pixelAt value(c, 20, 20) == [128, 128, 128, 255])
+
+// circles
+c = Canvas new(30, 30)
+c fillCircle(15, 15, 8, "#0f0")
+check("circle centre", pixelAt value(c, 15, 15) == [0, 255, 0, 255])
+check("circle outside", pixelAt value(c, 2, 2) == [255, 255, 255, 255])
+c fillCircles([[5, 5], [25, 25]], [2, 3], "#00f")
+check("circles", (pixelAt value(c, 5, 5) at(2) == 255) && (pixelAt value(c, 25, 25) at(0) < 50))
+
+// lines, dashes, caps
+c = Canvas new(40, 10)
+c line(0, 5, 40, 5, "#000", 2)
+check("horizontal line", pixelAt value(c, 20, 4) == [0, 0, 0, 255])
+c = Canvas new(40, 10)
+c line(0, 5, 40, 5, "#000", 2, #{dash: [5, 5]})
+check("dash on", pixelAt value(c, 2, 4) at(0) == 0)
+check("dash off", pixelAt value(c, 7, 4) == [255, 255, 255, 255])
+c = Canvas new(20, 10)
+c line(5, 5, 15, 5, "#000", 4, #{cap: "square"})
+check("square cap extends the line", pixelAt value(c, 3, 5) at(0) == 0)
+check("bad cap raises", (raises value({ c line(0, 0, 1, 1, "#000", 1, #{cap: "pointy"}) })) == "RuntimeError")
+
+// clipping
+c = Canvas new(20, 20)
+c clip(0, 0, 10, 20)
+c fillRect(0, 0, 20, 20, "#000")
+c unclip
+check("clip keeps inside", pixelAt value(c, 5, 5) at(0) == 0)
+check("clip keeps outside clean", pixelAt value(c, 15, 5) == [255, 255, 255, 255])
+
+// polygons with holes: even-odd
+c = Canvas new(30, 30)
+c fillPaths([[[2, 2], [28, 2], [28, 28], [2, 28]], [[10, 10], [20, 10], [20, 20], [10, 20]]], "#000", #{evenOdd: true})
+check("even-odd hole", pixelAt value(c, 15, 15) == [255, 255, 255, 255])
+check("even-odd ring", pixelAt value(c, 5, 5) at(0) == 0)
+
+// text
+w = Canvas textWidth("Hello", 20)
+check("text width", (w > 45) && (w < 56))
+check("wider text is wider", Canvas textWidth("MMM", 10) > Canvas textWidth("iii", 10))
+check("empty text", Canvas textWidth("", 10) == 0)
+c = Canvas new(60, 30)
+c text("Hi", 5, 22, 20, "#000")
+dark = 0
+c rgba bytes each { |v| (v < 100) ifTrue { dark = dark + 1 } }
+check("text draws", dark > 50)
+c = Canvas new(60, 30)
+c text("Hi", 30, 22, 20, "#000", #{anchor: "end"})
+check("text anchor end stays left of x", pixelAt value(c, 45, 15) == [255, 255, 255, 255])
+
+// images
+img = Image fromBytes(2, 1, 3, String fromBytes([255, 0, 0, 0, 0, 255]))
+c = Canvas new(20, 10)
+c drawImage(img, 0, 0, 20, 10)
+check("image stretched, left", pixelAt value(c, 4, 5) == [255, 0, 0, 255])
+check("image stretched, right", pixelAt value(c, 15, 5) == [0, 0, 255, 255])
+c = Canvas new(2, 2)
+c drawImage(Image fromBytes(1, 2, 1, String fromBytes([0, 200])), 0, 0, 2, 2, #{flipY: true})
+check("flipped image", (pixelAt value(c, 0, 0) at(0) == 200) && (pixelAt value(c, 0, 1) at(0) == 0))
+
+// results
+c = Canvas new(3, 2, "#123456")
+check("toImage", (c toImage width == 3) && (c toImage channels == 4))
+check("pngBytes", c pngBytes bytes slice(0, 4) == [137, 80, 78, 71])
+dir = File tempDir
+out = dir + "/canvas.png"
+c savePng(out)
+check("savePng", (Image load(out)) pixels == c rgba)
+File delete(out)
+File delete(dir)
+
+// errors
+check("bad colour raises", (raises value({ Canvas new(2, 2) fillRect(0, 0, 1, 1, "red") })) == "RuntimeError")
+check("bad size raises", (raises value({ Canvas new(0, 5) })) == "ArgumentError")
+check("new on a canvas raises", (raises value({ Canvas new(2, 2) new(2, 2) })) == "RuntimeError")
+check("odd coordinates raise", (raises value({ Canvas new(2, 2) fillPolygon([1, 2, 3], "#000") })) == "ArgumentError")
+check("bare prototype raises", (raises value({ CanvasCore rgba })) == "RuntimeError")
+
+(failures > 0) ifTrue {
+    (failures toString + " checks failed") println
+    System exit(1)
+}
+"canvas tests passed" println

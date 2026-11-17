@@ -62,3 +62,171 @@ Image = ImageCore clone {
         Image _create
     }
 }
+
+// Canvas -- anti-aliased drawing: shapes, lines and text onto pixels
+//
+//   c = Canvas new(400, 300)                  // white; or Canvas new(w, h, color)
+//   c fillRect(10, 10, 100, 50, "#1f77b4")
+//   c strokePolyline([[10, 200], [100, 120], [200, 180]], [214, 39, 40], 2)
+//   c fillCircle(300, 80, 30, [44, 160, 44, 0.5])
+//   c text("Hello", 200, 280, 24, "#000", #{anchor: "middle"})
+//   c savePng("drawing.png")                  // or c toImage, c pngBytes
+//
+// Coordinates are pixels from the top left, and may be fractions. A colour
+// is "#rrggbb", "#rgb", [r, g, b] or [r, g, b, alpha] (r, g, b in 0..255,
+// alpha in 0..1). Points are [[x, y], ...] or flat [x0, y0, x1, y1, ...].
+// Text uses the built-in font, DejaVu Sans. Drawing methods return the
+// canvas, so they chain.
+
+Canvas = CanvasCore clone {
+    new(w, h, background = nil) {
+        (self == Canvas) ifFalse { raise("Canvas: make canvases with Canvas new(width, height)") }
+        c = self _color(background ?? [255, 255, 255])
+        self _create(w, h, c at(0), c at(1), c at(2), c at(3))
+    }
+
+    // ---- shapes -----------------------------------------------------------
+
+    fillRect(x, y, w, h, color) { fillPolygon([x, y, x + w, y, x + w, y + h, x, y + h], color) }
+
+    strokeRect(x, y, w, h, color, width = 1, opts = nil) {
+        o = self _opts(opts)
+        o set("closed", true)
+        strokePolyline([x, y, x + w, y, x + w, y + h, x, y + h], color, width, o)
+    }
+
+    // A filled polygon; opts: evenOdd (true: holes where it overlaps itself)
+    fillPolygon(points, color, opts = nil) {
+        c = self _color(color)
+        self _fill(points, nil, c at(0), c at(1), c at(2), c at(3), self _evenOdd(opts))
+    }
+
+    // Several polygons filled together (overlaps are drawn once, and with
+    // evenOdd: true, inner ones make holes)
+    fillPaths(paths, color, opts = nil) {
+        c = self _color(color)
+        self _fill(paths, self _counts(paths), c at(0), c at(1), c at(2), c at(3), self _evenOdd(opts))
+    }
+
+    fillCircle(cx, cy, r, color) { fillCircles([cx, cy], r, color) }
+
+    // Circles at many centres at once (a radius, or one per centre)
+    fillCircles(centres, radius, color) {
+        c = self _color(color)
+        self _circles(centres, radius, c at(0), c at(1), c at(2), c at(3))
+    }
+
+    strokeCircle(cx, cy, r, color, width = 1) {
+        n = Math max(16, Math min(256, (r * 1.5) toInt + 8))
+        pts = []
+        n times { |i|
+            t = (i * 2 * Math pi) / n
+            pts append(cx + (r * Math cos(t)))
+            pts append(cy + (r * Math sin(t)))
+        }
+        strokePolyline(pts, color, width, #{closed: true})
+    }
+
+    // ---- lines ------------------------------------------------------------
+
+    line(x1, y1, x2, y2, color, width = 1, opts = nil) { strokePolyline([x1, y1, x2, y2], color, width, opts) }
+
+    // A line through points. opts: cap ("butt", "round", "square"), join
+    // ("round", "miter", "bevel"), dash (Array of on, off lengths in pixels),
+    // closed (join the last point to the first)
+    strokePolyline(points, color, width = 1, opts = nil) {
+        self _strokeWith(points, nil, color, width, opts)
+    }
+
+    // Several lines drawn together, so where they cross or meet is drawn once
+    strokePaths(paths, color, width = 1, opts = nil) {
+        self _strokeWith(paths, self _counts(paths), color, width, opts)
+    }
+
+    // ---- text and images --------------------------------------------------
+
+    // Text with its baseline at y. size is the font size in pixels (the em).
+    // opts: anchor ("start", "middle", "end": where x is along the text),
+    // angle (degrees, counter-clockwise)
+    text(s, x, y, size, color, opts = nil) {
+        o = opts ?? #{}
+        str = s toString
+        anchor = o get("anchor") ?? "start"
+        deg = o get("angle") ?? 0
+        shift = 0
+        (anchor == "middle") ifTrue { shift = self textWidth(str, size) / 2 }
+        (anchor == "end") ifTrue { shift = self textWidth(str, size) }
+        rad = (deg * Math pi) / 180
+        c = self _color(color)
+        self _text(str, x - (shift * Math cos(rad)), y + (shift * Math sin(rad)), size, c at(0), c at(1), c at(2), c at(3), deg)
+    }
+
+    // An Image stretched over x, y, w, h (its own size if w, h are nil),
+    // nearest pixel. opts: alpha, flipY (upside down)
+    drawImage(img, x, y, w = nil, h = nil, opts = nil) {
+        o = opts ?? #{}
+        flip = (o get("flipY") == true) ifTrue { 1 } ifFalse { 0 }
+        self _blit(img pixels, img width, img height, img channels, x, y, w ?? img width, h ?? img height, o get("alpha") ?? 1, flip)
+    }
+
+    // ---- results ----------------------------------------------------------
+
+    toImage() { Image fromBytes(self width, self height, 4, self rgba) }
+    savePng(path) { self toImage savePng(path); self }
+    pngBytes() { self toImage pngBytes }
+
+    toString() {
+        (self == Canvas) ifTrue { return "Canvas" }
+        "Canvas(" + self width toString + " x " + self height toString + ")"
+    }
+
+    // ---- internal ---------------------------------------------------------
+
+    _strokeWith(points, counts, color, width, opts) {
+        o = opts ?? #{}
+        c = self _color(color)
+        cap = ["butt", "round", "square"] indexOf(o get("cap") ?? "butt")
+        join = ["miter", "round", "bevel"] indexOf(o get("join") ?? "round")
+        (cap == nil || cap < 0) ifTrue { raise("Canvas: cap is \"butt\", \"round\" or \"square\"") }
+        (join == nil || join < 0) ifTrue { raise("Canvas: join is \"miter\", \"round\" or \"bevel\"") }
+        closed = (o get("closed") == true) ifTrue { 1 } ifFalse { 0 }
+        self _stroke(points, counts, width, c at(0), c at(1), c at(2), c at(3), cap, join, closed, o get("dash"))
+    }
+
+    // points per path, for paths of [x, y] pairs or of flat coordinates
+    _counts(paths) {
+        paths map { |p|
+            ((p size > 0) && (p first type == "Array")) ifTrue { p size } ifFalse { p size / 2 }
+        }
+    }
+
+    _evenOdd(opts) {
+        ((opts != nil) && (opts get("evenOdd") == true)) ifTrue { 1 } ifFalse { 0 }
+    }
+
+    _opts(opts) {
+        out = Dict clone
+        (opts != nil) ifTrue { opts each { |k, v| out set(k, v) } }
+        out
+    }
+
+    // [r, g, b, alpha] from "#rrggbb", "#rgb", [r, g, b] or [r, g, b, alpha]
+    _color(c) {
+        (c type == "Array") ifTrue {
+            (c size == 3) ifTrue { return [c at(0), c at(1), c at(2), 1] }
+            (c size == 4) ifTrue { return c }
+        }
+        ((c type == "String") && (c startsWith("#"))) ifTrue {
+            digits = "0123456789abcdef"
+            h = c lower slice(1, c length)
+            (h length == 3) ifTrue { h = h at(0) + h at(0) + h at(1) + h at(1) + h at(2) + h at(2) }
+            (h length == 6) ifTrue {
+                d = (0..5) map { |i| digits indexOf(h at(i)) }
+                ((d filter { |x| (x == nil) || (x < 0) }) size == 0) ifTrue {
+                    return [(d at(0) * 16) + d at(1), (d at(2) * 16) + d at(3), (d at(4) * 16) + d at(5), 1]
+                }
+            }
+        }
+        raise("Canvas: a colour is \"#rrggbb\", \"#rgb\", [r, g, b] or [r, g, b, alpha], not " + c toString)
+    }
+}

@@ -52,6 +52,9 @@ typedef struct {
 
 static void replace_pixels(Image *img, unsigned char *data, int w, int h, int c);
 
+// canvas.c registers CanvasCore
+void canvas_register(const ClayPluginAPI *clay_api);
+
 //------------------------------------------------------------------------
 // Image free callback
 //
@@ -751,4 +754,7 @@ CLAY_PLUGIN_EXPORT void image_plugin_init(const ClayPluginAPI *clay_api) {
 
     // register the ImageCore type with the Clay plugin API
     api->register_type(&def);
+
+    // and CanvasCore, for drawing (canvas.c)
+    canvas_register(api);
 }
