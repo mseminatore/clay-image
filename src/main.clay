@@ -21,6 +21,10 @@
 //   img savePng(path)        // saves as PNG
 //   img pngBytes             // the PNG file as a String of bytes
 //   img toString             // "Image(640 x 480, 3 channels)", so println works
+//   img quantize(16)         // a copy in at most 16 colours
+//
+//   Image saveGif(path, frames, #{delay: 100, loop: 0})   // animated GIF of Images
+//   Image saveApng(path, frames, opts)                     // animated PNG, full colour
 //
 // Pixel data is row by row, top to bottom, channels interleaved.
 //
@@ -50,6 +54,75 @@ Image = ImageCore clone {
     toString() {
         (self == Image) ifTrue { return "Image" }
         "Image(" + self width toString + " x " + self height toString + ", " + self channels toString + " channels)"
+    }
+
+    // ---- animation and palettes --------------------------------------------
+
+    // An animated GIF of frames (Images, or Canvases, all one size), as the
+    // file's bytes: Image gifBytes(frames, opts), or img gifBytes for one
+    // image. opts: delay (milliseconds a frame, 100, or one per frame), loop
+    // (0: for ever, the default; 1: once; n: n times), colors (2 to 256),
+    // quality (1, best, to 30, fastest; 10). The frames share one palette:
+    // their own colours when there are few enough, else 256 chosen by
+    // NeuQuant, with the most used colours (backgrounds, text) exact.
+    gifBytes(frames = nil, opts = nil) {
+        [fs, o] = self _frameArgs(frames, opts)
+        first = fs first
+        Image _gif(first width, first height, fs map { |f| f pixels }, fs map { |f| f channels },
+                   self _delays(fs, o), o get("loop") ?? 0, o get("colors") ?? 256, o get("quality") ?? 10)
+    }
+
+    saveGif(path, frames = nil, opts = nil) {
+        File write(path, self gifBytes(frames, opts))
+        path
+    }
+
+    // An animated PNG (APNG) of frames, in full colour: browsers show it
+    // animated, other viewers its first frame. opts: delay, loop.
+    apngBytes(frames = nil, opts = nil) {
+        [fs, o] = self _frameArgs(frames, opts)
+        first = fs first
+        Image _apng(first width, first height, fs map { |f| f pixels }, fs map { |f| f channels },
+                    self _delays(fs, o), o get("loop") ?? 0)
+    }
+
+    saveApng(path, frames = nil, opts = nil) {
+        File write(path, self apngBytes(frames, opts))
+        path
+    }
+
+    // A copy of the image in at most colors colours (2 to 256), chosen as
+    // gifBytes chooses them. opts: quality (1 best .. 30 fastest, 10).
+    quantize(colors = 256, opts = nil) {
+        (self == Image) ifTrue { raise("Image: quantize is sent to an image: img quantize(16)") }
+        q = (opts == nil) ifTrue { 10 } ifFalse { opts get("quality") ?? 10 }
+        Image _blank _setQuantized(self width, self height, self channels, self pixels, colors, q)
+    }
+
+    // [frames, opts]: frames as Images (a Canvas becomes its image; one
+    // image is one frame; sent to an image, that image)
+    _frameArgs(frames, opts) {
+        (frames type == "Dict") ifTrue { opts = frames; frames = nil }
+        (frames == nil) ifTrue {
+            (self == Image) ifTrue { raise("Image: an animation needs frames: Image gifBytes(frames, opts)") }
+            frames = [self]
+        }
+        (frames type == "Array") ifFalse { frames = [frames] }
+        (frames size == 0) ifTrue { raise("Image: an animation needs 1 or more frames") }
+        fs = frames map { |f|
+            ((f hasMethod("toImage")) && (f hasMethod("pixels") not)) ifTrue { f toImage } ifFalse { f }
+        }
+        [fs, opts ?? #{}]
+    }
+
+    // Milliseconds for each frame
+    _delays(fs, o) {
+        d = o get("delay") ?? 100
+        (d type == "Array") ifTrue {
+            (d size != fs size) ifTrue { raise("Image: give one delay for each frame, or one for all") }
+            return d map { |v| Math round(v) }
+        }
+        fs map { |f| Math round(d) }
     }
 
     // A new, empty image for a constructor to fill. Constructors are sent to

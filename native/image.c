@@ -717,6 +717,212 @@ static ClayPluginValue image_set_mapped(ClayPluginObject self, int argc, ClayPlu
 }
 
 //------------------------------------------------------------------------
+// animation and palettes (anim.c)
+//------------------------------------------------------------------------
+unsigned char *anim_gif(const unsigned char **frames, const int *chans, int nframes, int w, int h,
+                        const int *delays, int loop, int maxcolors, int samplefac, size_t *outLen);
+unsigned char *anim_apng(const unsigned char **frames, const int *chans, int nframes, int w, int h,
+                         const int *delays, int loop, size_t *outLen);
+int anim_quantize(const unsigned char *px, int w, int h, int c, int maxcolors, int samplefac, unsigned char *out);
+
+// An integer argument, or def when it is missing or nil
+static int int_arg(int argc, ClayPluginValue *argv, int i, int def) {
+    if (i >= argc || api->is_nil(argv[i]))
+        return def;
+
+    if (api->is_int(argv[i]))
+        return (int)api->to_int(argv[i]);
+
+    if (api->is_float(argv[i]))
+        return (int)api->to_float(argv[i]);
+
+    return def;
+}
+
+// The frames for _gif and _apng: (width, height, pixels, channels, delays):
+// pixels an Array of byte Strings, channels and delays Arrays of integers,
+// one each a frame. Fills the arrays (malloc'd; the caller frees them) and
+// returns the number of frames, or 0 after raising.
+static int gather_frames(int argc, ClayPluginValue *argv, const char *who,
+                         int *w, int *h, const unsigned char ***frames, int **chans, int **delays) {
+    if (argc < 5 || !api->is_int(argv[0]) || !api->is_int(argv[1]) ||
+        !api->is_array(argv[2]) || !api->is_array(argv[3]) || !api->is_array(argv[4])) {
+        api->raise(who, "ArgumentError");
+        return 0;
+    }
+
+    intptr_t iw = api->to_int(argv[0]), ih = api->to_int(argv[1]);
+
+    if (iw < 1 || ih < 1 || iw > 65535 || ih > 65535 || (size_t)iw * (size_t)ih > ((size_t)1 << 28)) {
+        api->raise("Image: animation frames must be 1 to 65535 pixels wide and high", "ArgumentError");
+        return 0;
+    }
+
+    size_t n = api->array_size(argv[2]);
+
+    if (n < 1 || n > 100000 || api->array_size(argv[3]) != n || api->array_size(argv[4]) != n) {
+        api->raise("Image: an animation needs 1 or more frames, with channels and a delay for each", "ArgumentError");
+        return 0;
+    }
+
+    *w = (int)iw;
+    *h = (int)ih;
+    *frames = (const unsigned char **)malloc(n * sizeof(unsigned char *));
+    *chans = (int *)malloc(n * sizeof(int));
+    *delays = (int *)malloc(n * sizeof(int));
+
+    if (!*frames || !*chans || !*delays) {
+        free((void *)*frames);
+        free(*chans);
+        free(*delays);
+        api->raise("Image: out of memory", "RuntimeError");
+        return 0;
+    }
+
+    for (size_t i = 0; i < n; i++) {
+        ClayPluginValue c = api->array_get(argv[3], i);
+        ClayPluginValue d = api->array_get(argv[4], i);
+        size_t len = 0;
+        const char *px = api->to_bytes(api->array_get(argv[2], i), &len);
+        int ch = api->is_int(c) ? (int)api->to_int(c) : 0;
+
+        if (!px || ch < 1 || ch > 4 || len != (size_t)iw * (size_t)ih * (size_t)ch) {
+            free((void *)*frames);
+            free(*chans);
+            free(*delays);
+            api->raise("Image: every animation frame must be the same size as the first", "ArgumentError");
+            return 0;
+        }
+
+        (*frames)[i] = (const unsigned char *)px;
+        (*chans)[i] = ch;
+        (*delays)[i] = api->is_int(d) ? (int)api->to_int(d) : (api->is_float(d) ? (int)api->to_float(d) : 100);
+    }
+
+    return (int)n;
+}
+
+//------------------------------------------------------------------------
+// Image _gif(width, height, pixels, channels, delays, loop, colors, sample)
+//
+// -> an animated GIF file as a String of bytes (behind Image gifBytes)
+//------------------------------------------------------------------------
+static ClayPluginValue image_gif(ClayPluginObject self, int argc, ClayPluginValue *argv) {
+    CLAY_UNUSED(self);
+
+    if (api->api_version < 4) {
+        api->raise("Image: gifBytes needs Clay plugin API 4", "RuntimeError");
+        return 0;
+    }
+
+    int w, h;
+    const unsigned char **frames;
+    int *chans, *delays;
+    int n = gather_frames(argc, argv, "Image: _gif expects (width, height, pixels, channels, delays, loop, colors, sample)",
+                          &w, &h, &frames, &chans, &delays);
+
+    if (n == 0)
+        return 0;
+
+    size_t len = 0;
+    unsigned char *gif = anim_gif(frames, chans, n, w, h, delays, int_arg(argc, argv, 5, 0),
+                                  int_arg(argc, argv, 6, 256), int_arg(argc, argv, 7, 10), &len);
+    free((void *)frames);
+    free(chans);
+    free(delays);
+
+    if (!gif) {
+        api->raise("Image: couldn't encode the GIF (out of memory)", "RuntimeError");
+        return 0;
+    }
+
+    ClayPluginValue bytes = api->make_bytes(gif, len);
+    free(gif);
+    return bytes;
+}
+
+//------------------------------------------------------------------------
+// Image _apng(width, height, pixels, channels, delays, loop)
+//
+// -> an animated PNG file as a String of bytes (behind Image apngBytes)
+//------------------------------------------------------------------------
+static ClayPluginValue image_apng(ClayPluginObject self, int argc, ClayPluginValue *argv) {
+    CLAY_UNUSED(self);
+
+    if (api->api_version < 4) {
+        api->raise("Image: apngBytes needs Clay plugin API 4", "RuntimeError");
+        return 0;
+    }
+
+    int w, h;
+    const unsigned char **frames;
+    int *chans, *delays;
+    int n = gather_frames(argc, argv, "Image: _apng expects (width, height, pixels, channels, delays, loop)",
+                          &w, &h, &frames, &chans, &delays);
+
+    if (n == 0)
+        return 0;
+
+    size_t len = 0;
+    unsigned char *png = anim_apng(frames, chans, n, w, h, delays, int_arg(argc, argv, 5, 0), &len);
+    free((void *)frames);
+    free(chans);
+    free(delays);
+
+    if (!png) {
+        api->raise("Image: couldn't encode the APNG (out of memory)", "RuntimeError");
+        return 0;
+    }
+
+    ClayPluginValue bytes = api->make_bytes(png, len);
+    free(png);
+    return bytes;
+}
+
+//------------------------------------------------------------------------
+// image _setQuantized(width, height, channels, bytes, colors, sample)
+//
+// -> the image (behind img quantize): those pixels in at most colors
+// colours, chosen by NeuQuant (or exactly, when there are few enough)
+//------------------------------------------------------------------------
+static ClayPluginValue image_set_quantized(ClayPluginObject self, int argc, ClayPluginValue *argv) {
+    if (api->api_version < 4) {
+        api->raise("Image: quantize needs Clay plugin API 4", "RuntimeError");
+        return 0;
+    }
+
+    Image *img = image_of(self);
+
+    if (!img)
+        return 0;
+
+    if (argc < 4 || !api->is_int(argv[0]) || !api->is_int(argv[1]) || !api->is_int(argv[2])) {
+        api->raise("Image: _setQuantized expects (width, height, channels, bytes, colors, sample)", "ArgumentError");
+        return 0;
+    }
+
+    int w = (int)api->to_int(argv[0]), h = (int)api->to_int(argv[1]), c = (int)api->to_int(argv[2]);
+    size_t len = 0;
+    const char *px = api->to_bytes(argv[3], &len);
+
+    if (!px || w < 1 || h < 1 || c < 1 || c > 4 || len != (size_t)w * (size_t)h * (size_t)c) {
+        api->raise("Image: quantize needs the image's own pixels", "ArgumentError");
+        return 0;
+    }
+
+    unsigned char *data = (unsigned char *)STBI_MALLOC(len);
+
+    if (!data || !anim_quantize((const unsigned char *)px, w, h, c, int_arg(argc, argv, 4, 256), int_arg(argc, argv, 5, 10), data)) {
+        STBI_FREE(data);
+        api->raise("Image: out of memory", "RuntimeError");
+        return 0;
+    }
+
+    replace_pixels(img, data, w, h, c);
+    return (ClayPluginValue)self;
+}
+
+//------------------------------------------------------------------------
 // the list of methods for the Image prototype
 //------------------------------------------------------------------------
 static ClayPluginMethod methods[] = {
@@ -733,6 +939,9 @@ static ClayPluginMethod methods[] = {
     { "_setFloats", image_set_floats },
     { "_setMapped", image_set_mapped },
     { "pngBytes", image_png_bytes },
+    { "_gif", image_gif },
+    { "_apng", image_apng },
+    { "_setQuantized", image_set_quantized },
     { NULL, NULL }
 };
 

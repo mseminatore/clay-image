@@ -2,8 +2,8 @@
 
 Image reading and writing for [Clay](https://github.com/mseminatore/clay), built on
 [stb_image](https://github.com/nothings/stb). It loads PNG, JPEG, BMP, GIF, TGA, PSD, HDR, PIC
-and PNM files, saves PNG, exposes pixels as bytes or as numbers in 0..1, and draws on a
-Canvas (anti-aliased shapes, lines and text). That makes it easy
+and PNM files, saves PNG and animated GIF and PNG, exposes pixels as bytes or as numbers in
+0..1, and draws on a Canvas (anti-aliased shapes, lines and text). That makes it easy
 to feed images to a neural network, or to turn data such as a mel spectrogram into an image.
 
 This is a **native brick**: its C sources are compiled the first time you import it,
@@ -46,6 +46,8 @@ Image info("photo.png")           // {width: 640, height: 480, channels: 3}, wit
 | `channels` | 1 gray, 2 gray + alpha, 3 RGB, 4 RGBA. |
 | `pixels` | The pixels as a String of `width * height * channels` bytes. |
 | `floats` | The pixels as a flat Array of numbers in 0..1 (each byte / 255). |
+| `quantize(colors, opts)` | A copy in at most `colors` colours (2 to 256), chosen as GIFs choose them (below). `quality`: 1 (best) to 30 (fastest), 10. |
+| `gifBytes`, `saveGif(path)` | The image as a one-frame GIF. |
 | `toString` | `"Image(640 x 480, 3 channels)"`, so `println` and `+` show an image's size. |
 
 Images don't change once made: to work on another file, make another image
@@ -62,6 +64,38 @@ Every image is an `Image`, so methods you add to `Image` reach all of them:
 Image setMethod("area", { self width * self height })
 (Image load("photo.png")) area println     // 307200
 ```
+
+### Animation
+
+| | |
+|---|---|
+| `Image saveGif(path, frames, opts)` | Saves an animated GIF of `frames`: Images (or Canvases) all the same size. Returns `path`. |
+| `Image gifBytes(frames, opts)` | The GIF file as a String of bytes. |
+| `Image saveApng(path, frames, opts)` | Saves an animated PNG: full colour, shown animated by browsers (other viewers show the first frame). |
+| `Image apngBytes(frames, opts)` | The APNG file's bytes. |
+
+Options: `delay` (milliseconds a frame, 100, or an Array with one per frame), `loop` (0, the
+default, plays for ever; 1 once; n n times), and for GIFs `colors` (up to 256) and
+`quality` (1 to 30, 10).
+
+```clay
+frames = (0..19) map { |i|
+    c = Canvas new(200, 120)
+    c fillCircle(10 + (i * 9), 60, 10, "#d62728")
+    c toImage
+}
+Image saveGif("ball.gif", frames, #{delay: 50})
+Image saveApng("ball.png", frames, #{delay: 50})
+```
+
+A GIF has at most 256 colours, shared here by all the frames so nothing flickers. When the
+frames use 256 colours or fewer (most charts), they are kept exactly. Otherwise the palette
+is learnt by [NeuQuant](https://scientificgems.wordpress.com/stuff/neuquant-fast-high-quality-image-quantization/)
+(Anthony Dekker, 1994), a small self-organising map trained on a sample of the pixels, and
+then the most used colours (backgrounds, text, lines) are set exactly, so flat areas stay
+pure. There is no dithering, which keeps text and lines crisp. Each frame after the first
+stores only the rectangle that changed, with unchanged pixels transparent, so an animation
+whose frames differ a little stays small. Pixels with alpha below 128 are transparent.
 
 ### Examples
 
@@ -169,6 +203,10 @@ Per-platform flags go in `cflags-macos`, `libs-linux`, `sources-windows` and so 
 `native/stb/LICENSE`). `native/stb/VERSION` records the commit. To upgrade, download the
 three headers and `LICENSE` from a newer commit and update `VERSION`.
 
+`native/anim.c` (GIF, APNG and palettes) is this brick's own code. Its colour quantizer
+implements the NeuQuant algorithm described in A. Dekker, "Kohonen neural networks for
+optimal colour quantization", *Network: Computation in Neural Systems* 5 (1994).
+
 `native/font/` holds the Canvas font, a subset of DejaVu Sans 2.37 under its own licence
 (`native/font/LICENSE`); `native/font/README.md` says how it was made and how to remake
 `dejavu_sans.h`, the C array the plugin compiles in.
@@ -178,6 +216,7 @@ three headers and `LICENSE` from a newer commit and update `VERSION`.
 ```sh
 clay tests/test_image.clay       # builds the plugin on first use; a brick imports itself by name
 clay tests/test_canvas.clay
+clay tests/test_anim.clay
 ```
 
 The plugin is cached in `build/` (not committed); delete it to force a rebuild. To

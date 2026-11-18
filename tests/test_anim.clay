@@ -1,0 +1,115 @@
+// Tests for animated GIF and APNG, and palettes. Run them from the brick's
+// directory: clay tests/test_anim.clay
+//
+// stb_image reads the first frame of a GIF or a PNG, so the tests read
+// files back through Image load; the frames after the first, and every
+// byte of the encoding, were checked against independent decoders while
+// the encoder was written.
+import("image")
+
+failures = 0
+
+check = { |what, ok|
+    ok ifFalse { ("FAIL: " + what) println; failures = failures + 1 }
+}
+
+raises = { |block| try { block value; "no error" } catch { |e| e type } }
+
+dir = File tempDir + "/clay-image-anim-test"
+(File isDir(dir)) ifFalse { File mkdir(dir) }
+
+// A frame of a few colours: white, a blue bar, a red square at x
+frame = { |x|
+    c = Canvas new(40, 30)
+    c fillRect(0, 0, 40, 3, [31, 119, 180])
+    c fillRect(x, 8, 10, 10, [214, 39, 40])
+    c toImage
+}
+frames = (0..4) map { |f| frame value(f * 6) }
+
+// the distinct colours of an image (r, g, b)
+colours = { |img|
+    px = img pixels bytes
+    c = img channels
+    seen = Dict clone
+    (img width * img height) times { |i|
+        k = i * c
+        seen set(px at(k) toString + "," + px at(k + 1) toString + "," + px at(k + 2) toString, true)
+    }
+    seen size
+}
+
+// ---- GIF ----------------------------------------------------------------
+g = Image gifBytes(frames, #{delay: 200, loop: 3})
+check("GIF header", g slice(0, 6) == "GIF89a")
+check("GIF size in the header", (g bytes at(6) == 40) && (g bytes at(8) == 30))
+check("GIF ends with a trailer", g bytes last == 59)
+check("GIF loops 3 times", g contains("NETSCAPE2.0"))
+check("later frames are small (only what changed)", g length < 2000)
+
+path = dir + "/anim.gif"
+check("saveGif returns the path", Image saveGif(path, frames, #{delay: 200}) == path)
+first = Image load(path)
+check("GIF reads back at its size", (first width == 40) && (first height == 30))
+same = true
+f0 = frames first pixels bytes
+g0 = first pixels bytes
+(40 * 30) times { |i|
+    3 times { |ch| (f0 at((i * 4) + ch) != g0 at((i * first channels) + ch)) ifTrue { same = false } }
+}
+check("few colours: the first frame is exact", same)
+
+single = frames first gifBytes
+check("one image as a GIF, without looping", (single slice(0, 6) == "GIF89a") && (single contains("NETSCAPE2.0") not))
+check("a Canvas is a frame", (Image gifBytes(Canvas new(8, 8))) slice(0, 6) == "GIF89a")
+check("gray images are frames", (Image gifBytes([Image fromBytes(2, 2, 1, String fromBytes([0, 85, 170, 255]))])) slice(0, 6) == "GIF89a")
+
+// many colours: a gradient, through NeuQuant
+grad = Canvas new(64, 48)
+48 times { |y| grad fillRect(0, y, 64, 1, [y * 5, 128 + (y * 2), 255 - (y * 5)]) }
+grad text("NeuQuant", 2, 30, 12, "#000000")
+gimg = grad toImage
+check("many colours to start with", colours value(gimg) > 256)
+gpath = dir + "/many.gif"
+Image saveGif(gpath, [gimg])
+back = Image load(gpath)
+check("many colours: at most 256 in the GIF", colours value(back) <= 256)
+worst = 0
+gp = gimg pixels bytes
+bp = back pixels bytes
+(64 * 48) times { |i|
+    3 times { |ch| worst = Math max(worst, (gp at((i * 4) + ch) - bp at((i * back channels) + ch)) abs) }
+}
+check("many colours: close to the original (" + worst toString + ")", worst <= 40)
+
+// ---- APNG ---------------------------------------------------------------
+a = Image apngBytes(frames, #{delay: [100, 200, 300, 400, 500]})
+check("APNG is a PNG", a slice(1, 4) == "PNG")
+check("APNG has animation control", a contains("acTL") && a contains("fcTL") && a contains("fdAT"))
+apath = dir + "/anim.png"
+Image saveApng(apath, frames)
+afirst = Image load(apath)
+check("APNG's first frame is exact (full colour)", afirst pixels == frames first pixels)
+
+// ---- quantize -----------------------------------------------------------
+q = gimg quantize(16)
+check("quantize keeps the size and channels", (q width == 64) && (q height == 48) && (q channels == 4))
+check("quantize to 16 colours", colours value(q) <= 16)
+check("few colours quantize exactly", (frames first quantize(8)) pixels == frames first pixels)
+
+// ---- errors -------------------------------------------------------------
+check("no frames raises", (raises value({ Image gifBytes([]) })) == "RuntimeError")
+check("frames of different sizes raise", (raises value({ Image gifBytes([frames first, Canvas new(5, 5) toImage]) })) == "ArgumentError")
+check("one delay per frame", (raises value({ Image gifBytes(frames, #{delay: [1, 2]}) })) == "RuntimeError")
+check("Image alone has no frames", (raises value({ Image gifBytes })) == "RuntimeError")
+check("quantize needs an image", (raises value({ Image quantize(4) })) == "RuntimeError")
+
+[path, gpath, apath] each { |p| File delete(p) }
+File delete(dir)
+
+(failures > 0) ifTrue {
+    (failures toString + " checks failed") println
+    System exit(1)
+}
+
+"animation tests passed" println

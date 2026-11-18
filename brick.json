@@ -1,6 +1,6 @@
 {
   "name": "image",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "clay": ">=0.3.4",
   "description": "Image reading and writing (stb_image), colormaps, and an anti-aliased drawing Canvas with text",
   "main": "src/main.clay",
@@ -9,7 +9,8 @@
     "plugin": "image",
     "sources": [
       "native/image.c",
-      "native/canvas.c"
+      "native/canvas.c",
+      "native/anim.c"
     ],
     "cflags": [],
     "libs": [],
